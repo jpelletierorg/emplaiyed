@@ -8,21 +8,17 @@ from __future__ import annotations
 
 import logging
 import os
-from pathlib import Path
 
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-# Walk up from this source file to find the project root (.env lives next to
-# pyproject.toml) and load it.  ``override=False`` means existing env vars win.
-_project_root = Path(__file__).resolve()
-for _parent in _project_root.parents:
-    if (_parent / "pyproject.toml").exists():
-        _env_path = _parent / ".env"
-        load_dotenv(_env_path, override=False)
-        logger.debug("Loaded .env from %s (exists=%s)", _env_path, _env_path.exists())
-        break
+# Load .env from the project root.  ``override=False`` means existing env vars win.
+from emplaiyed.core.paths import find_project_root as _find_root
+
+_env_path = _find_root() / ".env"
+load_dotenv(_env_path, override=False)
+logger.debug("Loaded .env from %s (exists=%s)", _env_path, _env_path.exists())
 
 # Default model: Claude Sonnet 4 on OpenRouter. Fast, capable, cheap.
 DEFAULT_MODEL = "anthropic/claude-opus-4.6"

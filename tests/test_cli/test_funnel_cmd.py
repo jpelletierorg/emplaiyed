@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 from typer.testing import CliRunner
 
 from emplaiyed.core.database import (
@@ -19,65 +17,16 @@ from emplaiyed.core.database import (
 from emplaiyed.core.models import (
     Application,
     ApplicationStatus,
-    Interaction,
-    InteractionType,
-    Opportunity,
 )
 from emplaiyed.main import app
 
 runner = CliRunner()
 
 
-@pytest.fixture
-def db(tmp_path: Path) -> sqlite3.Connection:
-    return init_db(tmp_path / "test.db")
-
-
-@pytest.fixture
-def sample_opportunity() -> Opportunity:
-    return Opportunity(
-        id="opp-1",
-        source="indeed",
-        source_url="https://indeed.com/job/123",
-        company="Acme Corp",
-        title="Backend Developer",
-        description="Build REST APIs",
-        location="Montreal",
-        salary_min=80000,
-        salary_max=110000,
-        scraped_at=datetime(2025, 1, 15, 10, 30, 0),
-    )
-
-
-@pytest.fixture
-def sample_application() -> Application:
-    return Application(
-        id="app-00001111-2222-3333-4444-555566667777",
-        opportunity_id="opp-1",
-        status=ApplicationStatus.DISCOVERED,
-        created_at=datetime(2025, 1, 15, 11, 0, 0),
-        updated_at=datetime(2025, 1, 15, 11, 0, 0),
-    )
-
-
-@pytest.fixture
-def sample_interaction() -> Interaction:
-    return Interaction(
-        id="int-1",
-        application_id="app-00001111-2222-3333-4444-555566667777",
-        type=InteractionType.EMAIL_SENT,
-        direction="outbound",
-        channel="email",
-        content="Dear hiring manager, I am writing to express my interest...",
-        metadata={"subject": "Application for Backend Developer", "to": "hr@acme.com"},
-        created_at=datetime(2025, 1, 16, 9, 0, 0),
-    )
-
-
 def _patch_db(db_path: Path):
     """Return a patch context manager that makes funnel commands use the given DB."""
     return patch(
-        "emplaiyed.cli.funnel_cmd.get_default_db_path",
+        "emplaiyed.cli.get_default_db_path",
         return_value=db_path,
     )
 

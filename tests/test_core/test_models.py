@@ -208,7 +208,7 @@ class TestEnums:
     def test_application_status_values(self):
         assert ApplicationStatus.DISCOVERED.value == "DISCOVERED"
         assert ApplicationStatus.GHOSTED.value == "GHOSTED"
-        assert len(ApplicationStatus) == 13
+        assert len(ApplicationStatus) == 18
 
     def test_interaction_type_values(self):
         assert InteractionType.EMAIL_SENT.value == "EMAIL_SENT"

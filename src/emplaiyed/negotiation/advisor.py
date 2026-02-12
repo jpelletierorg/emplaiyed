@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai.models import Model
 
 from emplaiyed.core.models import Offer, Opportunity, Profile
+from emplaiyed.core.prompt_helpers import format_salary_range
 from emplaiyed.llm.engine import complete_structured
 
 logger = logging.getLogger(__name__)
@@ -52,11 +53,7 @@ async def generate_negotiation(
     _model_override: Model | None = None,
 ) -> NegotiationStrategy:
     """Generate negotiation strategy for an offer."""
-    salary_min = 0
-    salary_target = 0
-    if profile.aspirations:
-        salary_min = profile.aspirations.salary_minimum or 0
-        salary_target = profile.aspirations.salary_target or 0
+    salary_min, salary_target = format_salary_range(profile)
 
     prompt = _NEGOTIATE_PROMPT.format(
         name=profile.name,

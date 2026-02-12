@@ -92,6 +92,22 @@ class TestScoreOpportunity:
         )
         assert result.justification  # not empty
 
+    async def test_day_to_day_populated(self):
+        result = await score_opportunity(
+            _test_profile(),
+            _test_opportunity(),
+            _model_override=TestModel(),
+        )
+        assert isinstance(result.day_to_day, str)
+
+    async def test_why_it_fits_populated(self):
+        result = await score_opportunity(
+            _test_profile(),
+            _test_opportunity(),
+            _model_override=TestModel(),
+        )
+        assert isinstance(result.why_it_fits, str)
+
 
 class TestScoreOpportunities:
     async def test_scores_multiple(self):
@@ -131,6 +147,25 @@ class TestScoreOpportunities:
         apps = list_applications(db_conn)
         assert len(apps) == 2
         assert all(a.status == ApplicationStatus.SCORED for a in apps)
+        db_conn.close()
+
+    async def test_persists_scoring_fields_in_applications(self, tmp_path: Path):
+        from emplaiyed.core.database import save_opportunity
+
+        db_conn = init_db(tmp_path / "test.db")
+        opp = _test_opportunity(company="ScoredCo")
+        save_opportunity(db_conn, opp)
+
+        results = await score_opportunities(
+            _test_profile(), [opp], db_conn=db_conn, _model_override=TestModel()
+        )
+        apps = list_applications(db_conn)
+        assert len(apps) == 1
+        app = apps[0]
+        assert app.score is not None
+        assert app.justification is not None
+        assert app.day_to_day is not None
+        assert app.why_it_fits is not None
         db_conn.close()
 
     async def test_no_applications_without_db(self):

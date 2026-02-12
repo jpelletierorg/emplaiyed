@@ -51,14 +51,7 @@ def save_profile(profile: Profile, path: Path) -> None:
 
 
 def get_default_profile_path() -> Path:
-    """Return ``data/profile.yaml`` relative to the project root.
+    """Return ``data/profile.yaml`` relative to the project root."""
+    from emplaiyed.core.paths import find_project_root
 
-    The project root is determined by walking up from this source file until
-    we find the directory that contains ``pyproject.toml``.
-    """
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        if (parent / "pyproject.toml").exists():
-            return parent / "data" / "profile.yaml"
-    # Fallback: two levels up from src/emplaiyed/core/
-    return Path(__file__).resolve().parents[3] / "data" / "profile.yaml"
+    return find_project_root() / "data" / "profile.yaml"

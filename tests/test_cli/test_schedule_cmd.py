@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -26,11 +25,6 @@ from emplaiyed.core.models import (
 from emplaiyed.main import app
 
 runner = CliRunner()
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> sqlite3.Connection:
-    return init_db(tmp_path / "test.db")
 
 
 @pytest.fixture
@@ -61,7 +55,7 @@ def sample_application() -> Application:
 def _patch_db(db_path: Path):
     """Return a patch context manager that makes schedule commands use the given DB."""
     return patch(
-        "emplaiyed.cli.schedule_cmd.get_default_db_path",
+        "emplaiyed.cli.get_default_db_path",
         return_value=db_path,
     )
 

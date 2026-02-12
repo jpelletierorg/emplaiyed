@@ -13,18 +13,22 @@ from emplaiyed.core.database import (
     get_event,
     get_offer,
     get_opportunity,
+    get_work_item,
     init_db,
     list_applications,
     list_events,
     list_interactions,
     list_offers,
     list_opportunities,
+    list_pending_work_items,
     list_upcoming_events,
+    list_work_items,
     save_application,
     save_event,
     save_interaction,
     save_offer,
     save_opportunity,
+    save_work_item,
 )
 from emplaiyed.core.models import (
     Application,
@@ -35,6 +39,9 @@ from emplaiyed.core.models import (
     OfferStatus,
     Opportunity,
     ScheduledEvent,
+    WorkItem,
+    WorkStatus,
+    WorkType,
 )
 
 
@@ -130,6 +137,7 @@ class TestInitDb:
         assert "offers" in tables
         assert "opportunities" in tables
         assert "scheduled_events" in tables
+        assert "work_items" in tables
 
     def test_idempotent(self, tmp_path: Path):
         """Calling init_db twice on the same path should not error."""
@@ -137,6 +145,41 @@ class TestInitDb:
         conn1 = init_db(db_path)
         conn1.close()
         conn2 = init_db(db_path)
+        conn2.close()
+
+    def test_migration_adds_scoring_columns(self, tmp_path: Path):
+        """Migrations add scoring columns to applications table."""
+        db_path = tmp_path / "migrate.db"
+        conn = init_db(db_path)
+        # Verify the columns exist by inserting a row with scoring data
+        app = Application(
+            id="app-m",
+            opportunity_id="opp-m",
+            status=ApplicationStatus.SCORED,
+            score=75,
+            justification="Good fit",
+            day_to_day="Write code daily",
+            why_it_fits="Skills align",
+            created_at=datetime(2025, 1, 1, 0, 0, 0),
+            updated_at=datetime(2025, 1, 1, 0, 0, 0),
+        )
+        # Need an opportunity first (FK)
+        save_opportunity(conn, Opportunity(
+            id="opp-m", source="test", company="Co", title="Dev",
+            description="D", scraped_at=datetime(2025, 1, 1, 0, 0, 0),
+        ))
+        save_application(conn, app)
+        loaded = get_application(conn, "app-m")
+        assert loaded.score == 75
+        conn.close()
+
+    def test_migration_idempotent(self, tmp_path: Path):
+        """Running init_db twice does not fail on already-added columns."""
+        db_path = tmp_path / "idempotent.db"
+        conn1 = init_db(db_path)
+        conn1.close()
+        conn2 = init_db(db_path)
+        # Should not raise
         conn2.close()
 
 
@@ -281,6 +324,40 @@ class TestApplicationCRUD:
         assert len(discovered) == 2
         scored = list_applications(db, status=ApplicationStatus.SCORED)
         assert len(scored) == 1
+
+    def test_save_and_get_with_scoring_fields(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        app = Application(
+            id="app-scored",
+            opportunity_id="opp-1",
+            status=ApplicationStatus.SCORED,
+            score=85,
+            justification="Strong Python match",
+            day_to_day="Build REST APIs and deploy to AWS.",
+            why_it_fits="Deep Python and cloud experience aligns perfectly.",
+            created_at=datetime(2025, 1, 15, 11, 0, 0),
+            updated_at=datetime(2025, 1, 15, 11, 0, 0),
+        )
+        save_application(db, app)
+        loaded = get_application(db, "app-scored")
+        assert loaded is not None
+        assert loaded.score == 85
+        assert loaded.justification == "Strong Python match"
+        assert loaded.day_to_day == "Build REST APIs and deploy to AWS."
+        assert loaded.why_it_fits == "Deep Python and cloud experience aligns perfectly."
+
+    def test_scoring_fields_default_to_none(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity, sample_application: Application
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        loaded = get_application(db, "app-1")
+        assert loaded.score is None
+        assert loaded.justification is None
+        assert loaded.day_to_day is None
+        assert loaded.why_it_fits is None
 
     def test_upsert_updates_status(
         self, db: sqlite3.Connection, sample_opportunity: Opportunity, sample_application: Application
@@ -765,6 +842,197 @@ class TestScheduledEventCRUD:
         save_event(db, event)
         loaded = get_event(db, "evt-minimal")
         assert loaded.notes is None
+
+
+# ---------------------------------------------------------------------------
+# Work Item CRUD
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_work_item() -> WorkItem:
+    return WorkItem(
+        id="wi-1",
+        application_id="app-1",
+        work_type=WorkType.OUTREACH,
+        status=WorkStatus.PENDING,
+        title="Send outreach to Acme",
+        instructions="Copy the email and send it.",
+        draft_content="Subject: Hi\n\nHello.",
+        target_status="OUTREACH_SENT",
+        previous_status="SCORED",
+        created_at=datetime(2025, 2, 10, 14, 0, 0),
+    )
+
+
+class TestWorkItemCRUD:
+    def test_save_and_get(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+        sample_work_item: WorkItem,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        save_work_item(db, sample_work_item)
+        loaded = get_work_item(db, "wi-1")
+        assert loaded is not None
+        assert loaded.work_type == WorkType.OUTREACH
+        assert loaded.status == WorkStatus.PENDING
+        assert loaded.title == "Send outreach to Acme"
+        assert loaded.instructions == "Copy the email and send it."
+        assert loaded.draft_content == "Subject: Hi\n\nHello."
+        assert loaded.target_status == "OUTREACH_SENT"
+        assert loaded.previous_status == "SCORED"
+        assert loaded.completed_at is None
+
+    def test_get_nonexistent_returns_none(self, db: sqlite3.Connection):
+        assert get_work_item(db, "nope") is None
+
+    def test_list_all(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        for i in range(3):
+            item = WorkItem(
+                id=f"wi-{i}",
+                application_id="app-1",
+                work_type=WorkType.OUTREACH,
+                title=f"Item {i}",
+                instructions="Do it.",
+                target_status="OUTREACH_SENT",
+                previous_status="SCORED",
+                created_at=datetime(2025, 2, 10, 14, i, 0),
+            )
+            save_work_item(db, item)
+        assert len(list_work_items(db)) == 3
+
+    def test_list_filter_by_status(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        for i, status in enumerate([WorkStatus.PENDING, WorkStatus.COMPLETED, WorkStatus.PENDING]):
+            item = WorkItem(
+                id=f"wi-{i}",
+                application_id="app-1",
+                work_type=WorkType.OUTREACH,
+                status=status,
+                title=f"Item {i}",
+                instructions="Do it.",
+                target_status="OUTREACH_SENT",
+                previous_status="SCORED",
+                created_at=datetime(2025, 2, 10, 14, i, 0),
+            )
+            save_work_item(db, item)
+        pending = list_work_items(db, status=WorkStatus.PENDING)
+        assert len(pending) == 2
+        completed = list_work_items(db, status=WorkStatus.COMPLETED)
+        assert len(completed) == 1
+
+    def test_list_pending(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        for i, status in enumerate([WorkStatus.PENDING, WorkStatus.COMPLETED, WorkStatus.SKIPPED]):
+            item = WorkItem(
+                id=f"wi-{i}",
+                application_id="app-1",
+                work_type=WorkType.OUTREACH,
+                status=status,
+                title=f"Item {i}",
+                instructions="Do it.",
+                target_status="OUTREACH_SENT",
+                previous_status="SCORED",
+                created_at=datetime(2025, 2, 10, 14, i, 0),
+            )
+            save_work_item(db, item)
+        pending = list_pending_work_items(db)
+        assert len(pending) == 1
+        assert pending[0].id == "wi-0"
+
+    def test_upsert_updates_status(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+        sample_work_item: WorkItem,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        save_work_item(db, sample_work_item)
+        updated = sample_work_item.model_copy(
+            update={
+                "status": WorkStatus.COMPLETED,
+                "completed_at": datetime(2025, 2, 10, 15, 0, 0),
+            }
+        )
+        save_work_item(db, updated)
+        loaded = get_work_item(db, "wi-1")
+        assert loaded.status == WorkStatus.COMPLETED
+        assert loaded.completed_at == datetime(2025, 2, 10, 15, 0, 0)
+        assert len(list_work_items(db)) == 1
+
+    def test_null_optional_fields(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        item = WorkItem(
+            id="wi-minimal",
+            application_id="app-1",
+            work_type=WorkType.FOLLOW_UP,
+            title="Follow up",
+            instructions="Do it.",
+            target_status="FOLLOW_UP_1",
+            previous_status="OUTREACH_SENT",
+            created_at=datetime(2025, 2, 11, 8, 0, 0),
+        )
+        save_work_item(db, item)
+        loaded = get_work_item(db, "wi-minimal")
+        assert loaded.draft_content is None
+        assert loaded.completed_at is None
+
+    def test_ordered_by_created_at(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+        sample_application: Application,
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, sample_application)
+        # Insert in reverse order
+        for i in [2, 0, 1]:
+            item = WorkItem(
+                id=f"wi-{i}",
+                application_id="app-1",
+                work_type=WorkType.OUTREACH,
+                title=f"Item {i}",
+                instructions="Do it.",
+                target_status="OUTREACH_SENT",
+                previous_status="SCORED",
+                created_at=datetime(2025, 2, 10, 14, i, 0),
+            )
+            save_work_item(db, item)
+        items = list_work_items(db)
+        assert items[0].id == "wi-0"
+        assert items[1].id == "wi-1"
+        assert items[2].id == "wi-2"
 
 
 # ---------------------------------------------------------------------------

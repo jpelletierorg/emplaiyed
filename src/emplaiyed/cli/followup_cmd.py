@@ -3,19 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
 
-from emplaiyed.core.database import get_default_db_path, init_db
+from emplaiyed.cli import console, db_connection, require_profile
+from emplaiyed.core.database import get_application
 from emplaiyed.core.models import ApplicationStatus
-from emplaiyed.core.profile_store import get_default_profile_path, load_profile
-from emplaiyed.followup import draft_followup, find_stale_applications, send_followup
-
-logger = logging.getLogger(__name__)
-console = Console()
+from emplaiyed.followup import draft_followup, enqueue_followup, find_stale_applications
 
 
 def followup_command(
@@ -24,15 +19,9 @@ def followup_command(
     ),
 ) -> None:
     """Check for applications needing follow-up and send messages."""
-    profile_path = get_default_profile_path()
-    if not profile_path.exists():
-        console.print("[red]No profile found. Run `emplaiyed profile build` first.[/red]")
-        raise typer.Exit(code=1)
+    profile = require_profile()
 
-    profile = load_profile(profile_path)
-    conn = init_db(get_default_db_path())
-
-    try:
+    with db_connection() as conn:
         stale = find_stale_applications(conn, stale_days=stale_days)
 
         if not stale:
@@ -44,7 +33,7 @@ def followup_command(
             f"for {stale_days}+ days:\n"
         )
 
-        sent_count = 0
+        queued_count = 0
         for i, (app_id, next_status, opp, days) in enumerate(stale, 1):
             followup_num = 1 if next_status == "FOLLOW_UP_1" else 2
             target = ApplicationStatus(next_status)
@@ -55,9 +44,7 @@ def followup_command(
             )
 
             try:
-                draft = asyncio.run(
-                    draft_followup(profile, opp, followup_num, days)
-                )
+                draft = asyncio.run(draft_followup(profile, opp, followup_num, days))
             except Exception as exc:
                 console.print(f"    [red]Failed to draft: {exc}[/red]\n")
                 continue
@@ -68,11 +55,18 @@ def followup_command(
                 border_style="yellow",
             ))
 
-            send_followup(conn, app_id, draft, target)
-            console.print(f"    [green]Follow-up sent[/green]\n")
-            sent_count += 1
+            app = get_application(conn, app_id)
+            previous = app.status if app else ApplicationStatus.OUTREACH_SENT
 
-        if sent_count:
-            console.print(f"\n[green]{sent_count} follow-ups sent.[/green]")
-    finally:
-        conn.close()
+            item = enqueue_followup(conn, app_id, opp, draft, target, previous, followup_num)
+            console.print(
+                f"    [blue]Work item created:[/blue] {item.id[:8]}\n"
+                f"    Run `emplaiyed work next` to review.\n"
+            )
+            queued_count += 1
+
+        if queued_count:
+            console.print(
+                f"\n[blue]{queued_count} work items created.[/blue] "
+                f"Run `emplaiyed work list` to see your queue."
+            )

@@ -37,6 +37,7 @@ def _build_model(model: str | None = None) -> Model:
 async def complete(
     prompt: str,
     *,
+    system_prompt: str | None = None,
     model: str | None = None,
     _model_override: Model | None = None,
     **kwargs: object,
@@ -47,6 +48,8 @@ async def complete(
     ----------
     prompt:
         The user prompt to send to the model.
+    system_prompt:
+        Optional system prompt to set the model's persona/instructions.
     model:
         OpenRouter model string (e.g. ``"anthropic/claude-sonnet-4-5"``).
         Falls back to ``DEFAULT_MODEL`` when *None*.
@@ -58,7 +61,7 @@ async def complete(
     """
     llm = _model_override or _build_model(model)
     logger.debug("LLM call (text): model=%s, prompt_len=%d", llm, len(prompt))
-    agent: Agent[None, str] = Agent(llm, output_type=str)
+    agent: Agent[None, str] = Agent(llm, output_type=str, system_prompt=system_prompt or "")
     result = await agent.run(prompt)
     return result.output
 
@@ -67,6 +70,7 @@ async def complete_structured(
     prompt: str,
     output_type: type[T],
     *,
+    system_prompt: str | None = None,
     model: str | None = None,
     _model_override: Model | None = None,
     **kwargs: object,
@@ -79,6 +83,8 @@ async def complete_structured(
         The user prompt to send to the model.
     output_type:
         A ``pydantic.BaseModel`` subclass describing the expected output.
+    system_prompt:
+        Optional system prompt to set the model's persona/instructions.
     model:
         OpenRouter model string. Falls back to ``DEFAULT_MODEL``.
     _model_override:
@@ -88,6 +94,6 @@ async def complete_structured(
     """
     llm = _model_override or _build_model(model)
     logger.debug("LLM call (structured → %s): model=%s, prompt_len=%d", output_type.__name__, llm, len(prompt))
-    agent: Agent[None, T] = Agent(llm, output_type=output_type)
+    agent: Agent[None, T] = Agent(llm, output_type=output_type, system_prompt=system_prompt or "")
     result = await agent.run(prompt)
     return result.output

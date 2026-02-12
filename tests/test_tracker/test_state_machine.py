@@ -2,42 +2,22 @@
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
 from emplaiyed.core.database import (
-    init_db,
     save_application,
     save_opportunity,
     get_application,
 )
-from emplaiyed.core.models import Application, ApplicationStatus, Opportunity
+from emplaiyed.core.models import Application, ApplicationStatus
 from emplaiyed.tracker.state_machine import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
     can_transition,
     transition,
 )
-
-
-@pytest.fixture
-def db(tmp_path: Path) -> sqlite3.Connection:
-    return init_db(tmp_path / "test.db")
-
-
-@pytest.fixture
-def sample_opportunity() -> Opportunity:
-    return Opportunity(
-        id="opp-1",
-        source="indeed",
-        company="Acme Corp",
-        title="Backend Developer",
-        description="Build REST APIs",
-        scraped_at=datetime(2025, 1, 15, 10, 30, 0),
-    )
 
 
 def _make_app(status: ApplicationStatus) -> Application:
@@ -64,6 +44,7 @@ class TestValidTransitionsStructure:
     def test_terminal_states_have_no_transitions(self):
         assert VALID_TRANSITIONS[ApplicationStatus.ACCEPTED] == set()
         assert VALID_TRANSITIONS[ApplicationStatus.REJECTED] == set()
+        assert VALID_TRANSITIONS[ApplicationStatus.PASSED] == set()
 
     def test_ghosted_can_receive_response(self):
         """GHOSTED is not fully terminal — they might reply later."""
@@ -81,10 +62,25 @@ class TestCanTransition:
     def test_discovered_to_scored(self):
         assert can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.SCORED)
 
+    def test_scored_to_outreach_pending(self):
+        assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.OUTREACH_PENDING)
+
     def test_scored_to_outreach_sent(self):
+        """Backward compat: auto-send still works."""
         assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.OUTREACH_SENT)
 
+    def test_outreach_pending_to_outreach_sent(self):
+        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.OUTREACH_SENT)
+
+    def test_outreach_pending_to_scored(self):
+        """Skip reverts to SCORED."""
+        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.SCORED)
+
+    def test_outreach_sent_to_follow_up_pending(self):
+        assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.FOLLOW_UP_PENDING)
+
     def test_outreach_sent_to_follow_up_1(self):
+        """Backward compat: auto-send still works."""
         assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.FOLLOW_UP_1)
 
     def test_outreach_sent_to_response_received(self):
@@ -93,7 +89,21 @@ class TestCanTransition:
     def test_outreach_sent_to_ghosted(self):
         assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.GHOSTED)
 
+    def test_follow_up_pending_to_follow_up_1(self):
+        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.FOLLOW_UP_1)
+
+    def test_follow_up_pending_to_follow_up_2(self):
+        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.FOLLOW_UP_2)
+
+    def test_follow_up_pending_to_outreach_sent(self):
+        """Skip reverts to previous state."""
+        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.OUTREACH_SENT)
+
+    def test_follow_up_1_to_follow_up_pending(self):
+        assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.FOLLOW_UP_PENDING)
+
     def test_follow_up_1_to_follow_up_2(self):
+        """Backward compat: auto-send still works."""
         assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.FOLLOW_UP_2)
 
     def test_follow_up_1_to_response_received(self):
@@ -130,24 +140,60 @@ class TestCanTransition:
     def test_interview_completed_to_rejected(self):
         assert can_transition(ApplicationStatus.INTERVIEW_COMPLETED, ApplicationStatus.REJECTED)
 
+    def test_offer_received_to_negotiation_pending(self):
+        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.NEGOTIATION_PENDING)
+
+    def test_offer_received_to_acceptance_pending(self):
+        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.ACCEPTANCE_PENDING)
+
     def test_offer_received_to_negotiating(self):
+        """Backward compat."""
         assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.NEGOTIATING)
 
     def test_offer_received_to_accepted(self):
+        """Backward compat."""
         assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.ACCEPTED)
 
     def test_offer_received_to_rejected(self):
         assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.REJECTED)
 
+    def test_negotiation_pending_to_negotiating(self):
+        assert can_transition(ApplicationStatus.NEGOTIATION_PENDING, ApplicationStatus.NEGOTIATING)
+
+    def test_negotiation_pending_to_offer_received(self):
+        """Skip reverts."""
+        assert can_transition(ApplicationStatus.NEGOTIATION_PENDING, ApplicationStatus.OFFER_RECEIVED)
+
     def test_negotiating_to_offer_received(self):
         """Counter-offer."""
         assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.OFFER_RECEIVED)
 
+    def test_negotiating_to_acceptance_pending(self):
+        assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.ACCEPTANCE_PENDING)
+
     def test_negotiating_to_accepted(self):
+        """Backward compat."""
         assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.ACCEPTED)
 
     def test_negotiating_to_rejected(self):
         assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.REJECTED)
+
+    def test_acceptance_pending_to_accepted(self):
+        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.ACCEPTED)
+
+    def test_acceptance_pending_to_offer_received(self):
+        """Skip reverts."""
+        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.OFFER_RECEIVED)
+
+    def test_acceptance_pending_to_negotiating(self):
+        """Skip reverts from negotiating path."""
+        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.NEGOTIATING)
+
+    def test_scored_to_passed(self):
+        assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.PASSED)
+
+    def test_outreach_pending_to_passed(self):
+        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.PASSED)
 
     def test_ghosted_to_response_received(self):
         assert can_transition(ApplicationStatus.GHOSTED, ApplicationStatus.RESPONSE_RECEIVED)
@@ -173,6 +219,16 @@ class TestCanTransition:
                 assert not can_transition(ApplicationStatus.REJECTED, target), (
                     f"REJECTED should not transition to {target.value}"
                 )
+
+    def test_cannot_leave_passed(self):
+        for target in ApplicationStatus:
+            if target != ApplicationStatus.PASSED:
+                assert not can_transition(ApplicationStatus.PASSED, target), (
+                    f"PASSED should not transition to {target.value}"
+                )
+
+    def test_discovered_cannot_pass(self):
+        assert not can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.PASSED)
 
     def test_cannot_self_transition(self):
         """No status should transition to itself."""
@@ -269,19 +325,24 @@ class TestTransition:
         db: sqlite3.Connection,
         sample_opportunity: Opportunity,
     ):
-        """Walk through the entire happy path."""
+        """Walk through the entire happy path with PENDING states."""
         save_opportunity(db, sample_opportunity)
         app = _make_app(ApplicationStatus.DISCOVERED)
         save_application(db, app)
 
         steps = [
             ApplicationStatus.SCORED,
+            ApplicationStatus.OUTREACH_PENDING,
             ApplicationStatus.OUTREACH_SENT,
+            ApplicationStatus.FOLLOW_UP_PENDING,
+            ApplicationStatus.FOLLOW_UP_1,
             ApplicationStatus.RESPONSE_RECEIVED,
             ApplicationStatus.INTERVIEW_SCHEDULED,
             ApplicationStatus.INTERVIEW_COMPLETED,
             ApplicationStatus.OFFER_RECEIVED,
+            ApplicationStatus.NEGOTIATION_PENDING,
             ApplicationStatus.NEGOTIATING,
+            ApplicationStatus.ACCEPTANCE_PENDING,
             ApplicationStatus.ACCEPTED,
         ]
 
@@ -314,6 +375,23 @@ class TestTransition:
 
         loaded = get_application(db, "app-1")
         assert loaded.status == ApplicationStatus.OFFER_RECEIVED
+
+    def test_scored_to_passed(
+        self,
+        db: sqlite3.Connection,
+        sample_opportunity: Opportunity,
+    ):
+        """SCORED applications can be marked as PASSED (not interested)."""
+        save_opportunity(db, sample_opportunity)
+        app = _make_app(ApplicationStatus.SCORED)
+        save_application(db, app)
+
+        result = transition(db, "app-1", ApplicationStatus.PASSED)
+        assert result.status == ApplicationStatus.PASSED
+
+        # Terminal: can't transition out
+        with pytest.raises(InvalidTransitionError):
+            transition(db, "app-1", ApplicationStatus.OUTREACH_PENDING)
 
     def test_negotiation_loop(
         self,

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai.models import Model
 
 from emplaiyed.core.models import Opportunity, Profile
+from emplaiyed.core.prompt_helpers import format_recent_role, format_salary_range, format_skills
 from emplaiyed.llm.engine import complete_structured
 
 logger = logging.getLogger(__name__)
@@ -58,21 +59,12 @@ async def generate_prep(
     _model_override: Model | None = None,
 ) -> PrepSheet:
     """Generate an interview prep sheet."""
-    recent_role = "Not specified"
-    if profile.employment_history:
-        e = profile.employment_history[0]
-        recent_role = f"{e.title} at {e.company}"
-
-    salary_min = 0
-    salary_target = 0
-    if profile.aspirations:
-        salary_min = profile.aspirations.salary_minimum or 0
-        salary_target = profile.aspirations.salary_target or 0
+    salary_min, salary_target = format_salary_range(profile)
 
     prompt = _PREP_PROMPT.format(
         name=profile.name,
-        skills=", ".join(profile.skills[:10]) if profile.skills else "Not specified",
-        recent_role=recent_role,
+        skills=format_skills(profile),
+        recent_role=format_recent_role(profile),
         salary_min=salary_min,
         salary_target=salary_target,
         company=opportunity.company,
