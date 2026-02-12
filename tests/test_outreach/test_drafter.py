@@ -17,7 +17,8 @@ from emplaiyed.core.models import (
     Opportunity,
     Profile,
 )
-from emplaiyed.outreach.drafter import OutreachDraft, draft_outreach, send_outreach
+from emplaiyed.core.database import get_work_item, list_pending_work_items
+from emplaiyed.outreach.drafter import OutreachDraft, draft_outreach, enqueue_outreach, send_outreach
 
 
 def _test_profile() -> Profile:
@@ -61,6 +62,7 @@ class TestDraftOutreach:
 
 class TestSendOutreach:
     def test_records_interaction_and_transitions(self, tmp_path: Path):
+        """send_outreach does two-step: SCORED→OUTREACH_PENDING→OUTREACH_SENT."""
         from emplaiyed.core.database import save_opportunity
 
         db_conn = init_db(tmp_path / "test.db")
@@ -89,8 +91,51 @@ class TestSendOutreach:
         assert len(interactions) == 1
         assert "Application — Software Developer" in interactions[0].content
 
-        # Check application transitioned to OUTREACH_SENT
+        # Check application transitioned to OUTREACH_SENT (via OUTREACH_PENDING)
         apps = list_applications(db_conn)
         assert apps[0].status == ApplicationStatus.OUTREACH_SENT
+
+        db_conn.close()
+
+
+class TestEnqueueOutreach:
+    def test_creates_work_item_and_transitions_to_pending(self, tmp_path: Path):
+        from emplaiyed.core.database import save_opportunity
+
+        db_conn = init_db(tmp_path / "test.db")
+        opp = _test_opportunity()
+        save_opportunity(db_conn, opp)
+
+        now = datetime.now()
+        app = Application(
+            opportunity_id=opp.id,
+            status=ApplicationStatus.SCORED,
+            created_at=now,
+            updated_at=now,
+        )
+        save_application(db_conn, app)
+
+        draft = OutreachDraft(
+            subject="Application — Software Developer",
+            body="Dear Hiring Team, I'd love to join your team.",
+        )
+
+        item = enqueue_outreach(db_conn, app.id, opp, draft)
+
+        # Application should be in OUTREACH_PENDING
+        apps = list_applications(db_conn)
+        assert apps[0].status == ApplicationStatus.OUTREACH_PENDING
+
+        # Work item should exist and be PENDING
+        loaded = get_work_item(db_conn, item.id)
+        assert loaded is not None
+        assert loaded.target_status == "OUTREACH_SENT"
+        assert loaded.previous_status == "SCORED"
+        assert loaded.draft_content is not None
+        assert "Application — Software Developer" in loaded.draft_content
+
+        # Should appear in pending list
+        pending = list_pending_work_items(db_conn)
+        assert len(pending) == 1
 
         db_conn.close()

@@ -109,6 +109,8 @@ class ScoredOpportunity(BaseModel):
     opportunity: Opportunity
     score: int = Field(ge=0, le=100)
     justification: str
+    day_to_day: str = ""
+    why_it_fits: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -118,17 +120,22 @@ class ScoredOpportunity(BaseModel):
 class ApplicationStatus(str, enum.Enum):
     DISCOVERED = "DISCOVERED"
     SCORED = "SCORED"
+    OUTREACH_PENDING = "OUTREACH_PENDING"
     OUTREACH_SENT = "OUTREACH_SENT"
+    FOLLOW_UP_PENDING = "FOLLOW_UP_PENDING"
     FOLLOW_UP_1 = "FOLLOW_UP_1"
     FOLLOW_UP_2 = "FOLLOW_UP_2"
     RESPONSE_RECEIVED = "RESPONSE_RECEIVED"
     INTERVIEW_SCHEDULED = "INTERVIEW_SCHEDULED"
     INTERVIEW_COMPLETED = "INTERVIEW_COMPLETED"
     OFFER_RECEIVED = "OFFER_RECEIVED"
+    NEGOTIATION_PENDING = "NEGOTIATION_PENDING"
     NEGOTIATING = "NEGOTIATING"
+    ACCEPTANCE_PENDING = "ACCEPTANCE_PENDING"
     ACCEPTED = "ACCEPTED"
     REJECTED = "REJECTED"
     GHOSTED = "GHOSTED"
+    PASSED = "PASSED"
 
 
 class InteractionType(str, enum.Enum):
@@ -158,6 +165,10 @@ class Application(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     opportunity_id: str
     status: ApplicationStatus
+    score: int | None = None
+    justification: str | None = None
+    day_to_day: str | None = None
+    why_it_fits: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -197,3 +208,35 @@ class ScheduledEvent(BaseModel):
     scheduled_date: datetime
     notes: str | None = None
     created_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Work Queue
+# ---------------------------------------------------------------------------
+
+
+class WorkType(str, enum.Enum):
+    OUTREACH = "OUTREACH"
+    FOLLOW_UP = "FOLLOW_UP"
+    NEGOTIATE = "NEGOTIATE"
+    ACCEPT = "ACCEPT"
+
+
+class WorkStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    COMPLETED = "COMPLETED"
+    SKIPPED = "SKIPPED"
+
+
+class WorkItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    application_id: str
+    work_type: WorkType
+    status: WorkStatus = WorkStatus.PENDING
+    title: str
+    instructions: str
+    draft_content: str | None = None
+    target_status: str  # ApplicationStatus value to transition to on "done"
+    previous_status: str  # ApplicationStatus value to revert to on "skip"
+    created_at: datetime
+    completed_at: datetime | None = None

@@ -18,14 +18,31 @@ from emplaiyed.core.models import Application, ApplicationStatus
 
 VALID_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
     ApplicationStatus.DISCOVERED: {ApplicationStatus.SCORED},
-    ApplicationStatus.SCORED: {ApplicationStatus.OUTREACH_SENT},
+    ApplicationStatus.SCORED: {
+        ApplicationStatus.OUTREACH_PENDING,
+        ApplicationStatus.OUTREACH_SENT,  # backward compat (auto-send)
+        ApplicationStatus.PASSED,
+    },
+    ApplicationStatus.OUTREACH_PENDING: {
+        ApplicationStatus.OUTREACH_SENT,
+        ApplicationStatus.SCORED,  # skip reverts
+        ApplicationStatus.PASSED,
+    },
     ApplicationStatus.OUTREACH_SENT: {
-        ApplicationStatus.FOLLOW_UP_1,
+        ApplicationStatus.FOLLOW_UP_PENDING,
+        ApplicationStatus.FOLLOW_UP_1,  # backward compat (auto-send)
         ApplicationStatus.RESPONSE_RECEIVED,
         ApplicationStatus.GHOSTED,
     },
-    ApplicationStatus.FOLLOW_UP_1: {
+    ApplicationStatus.FOLLOW_UP_PENDING: {
+        ApplicationStatus.FOLLOW_UP_1,
         ApplicationStatus.FOLLOW_UP_2,
+        ApplicationStatus.OUTREACH_SENT,  # skip reverts to previous
+        ApplicationStatus.FOLLOW_UP_1,  # skip from FU2 pending
+    },
+    ApplicationStatus.FOLLOW_UP_1: {
+        ApplicationStatus.FOLLOW_UP_PENDING,
+        ApplicationStatus.FOLLOW_UP_2,  # backward compat (auto-send)
         ApplicationStatus.RESPONSE_RECEIVED,
         ApplicationStatus.GHOSTED,
     },
@@ -47,20 +64,33 @@ VALID_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.REJECTED,
     },
     ApplicationStatus.OFFER_RECEIVED: {
-        ApplicationStatus.NEGOTIATING,
-        ApplicationStatus.ACCEPTED,
+        ApplicationStatus.NEGOTIATION_PENDING,
+        ApplicationStatus.ACCEPTANCE_PENDING,
+        ApplicationStatus.NEGOTIATING,  # backward compat
+        ApplicationStatus.ACCEPTED,  # backward compat
         ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.NEGOTIATION_PENDING: {
+        ApplicationStatus.NEGOTIATING,
+        ApplicationStatus.OFFER_RECEIVED,  # skip reverts
     },
     ApplicationStatus.NEGOTIATING: {
         ApplicationStatus.OFFER_RECEIVED,  # counter-offer
-        ApplicationStatus.ACCEPTED,
+        ApplicationStatus.ACCEPTANCE_PENDING,
+        ApplicationStatus.ACCEPTED,  # backward compat
         ApplicationStatus.REJECTED,
+    },
+    ApplicationStatus.ACCEPTANCE_PENDING: {
+        ApplicationStatus.ACCEPTED,
+        ApplicationStatus.OFFER_RECEIVED,  # skip reverts
+        ApplicationStatus.NEGOTIATING,  # skip reverts
     },
     ApplicationStatus.ACCEPTED: set(),  # terminal
     ApplicationStatus.REJECTED: set(),  # terminal
     ApplicationStatus.GHOSTED: {
         ApplicationStatus.RESPONSE_RECEIVED,  # they might reply later
     },
+    ApplicationStatus.PASSED: set(),  # terminal
 }
 
 

@@ -1,3 +1,5 @@
+"""Sources CLI — scan job boards and score opportunities."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,11 +7,11 @@ import logging
 from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.table import Table
 
-from emplaiyed.core.database import get_default_db_path, init_db
-from emplaiyed.core.profile_store import get_default_profile_path, load_profile
+from emplaiyed.cli import console, try_load_profile
+from emplaiyed.core.database import get_default_db_path, init_db, list_applications
+from emplaiyed.core.models import ApplicationStatus
 from emplaiyed.sources import get_available_sources
 from emplaiyed.sources.base import SearchQuery
 
@@ -20,8 +22,6 @@ sources_app = typer.Typer(
     help="Manage and run job sources / scrapers.",
     no_args_is_help=True,
 )
-
-console = Console()
 
 
 @sources_app.command("list")
@@ -34,8 +34,6 @@ def list_sources():
     table.add_column("Status", style="yellow")
 
     for name, source in sources.items():
-        # Probe whether scrape() is implemented by checking for
-        # NotImplementedError in a lightweight way.
         status = _probe_source_status(source)
         table.add_row(name, type(source).__name__, status)
 
@@ -62,12 +60,14 @@ def scan(
         )
         raise typer.Exit(code=1)
 
+    profile = try_load_profile()
+
     # Derive keywords and/or location from profile when not provided
     kw_list: list[str] = []
     if keywords is not None:
         kw_list = [k.strip() for k in keywords.split(",") if k.strip()]
-    else:
-        kw_list, location = _derive_from_profile(kw_list, location)
+    elif profile:
+        kw_list, location = _derive_from_profile(profile, location)
 
     if not kw_list:
         console.print(
@@ -76,16 +76,15 @@ def scan(
         )
         raise typer.Exit(code=1)
 
-    # If location still not set, try deriving just location from profile
-    if location is None:
-        location = _derive_location_from_profile()
+    # If location still not set, try deriving from profile
+    if location is None and profile and profile.aspirations:
+        for pref in profile.aspirations.geographic_preferences:
+            if pref.lower().strip() != "remote":
+                location = pref
+                console.print(f"[dim]Derived location from profile: {location}[/dim]")
+                break
 
-    query = SearchQuery(
-        keywords=kw_list,
-        location=location,
-        max_results=max_results,
-    )
-    logger.debug("Final query: keywords=%s, location=%s", query.keywords, query.location)
+    query = SearchQuery(keywords=kw_list, location=location, max_results=max_results)
 
     src = available[source]
     console.print(
@@ -93,158 +92,165 @@ def scan(
         f"keywords={query.keywords}, location={query.location} ..."
     )
 
+    db_conn = init_db(get_default_db_path())
     try:
-        db_conn = init_db(get_default_db_path())
-        results = asyncio.run(src.scrape_and_persist(query, db_conn))
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{exc}[/yellow]")
-        raise typer.Exit(code=1)
+        try:
+            results = asyncio.run(src.scrape_and_persist(query, db_conn))
+        except NotImplementedError as exc:
+            console.print(f"[yellow]{exc}[/yellow]")
+            raise typer.Exit(code=1)
 
-    if not results:
-        console.print("[yellow]No new opportunities found.[/yellow]")
+        if not results:
+            console.print("[yellow]No new opportunities found.[/yellow]")
+            return
+
+        console.print(f"[green]{len(results)} new opportunities found.[/green]")
+
+        # Score + eager asset generation
+        scored = _score_results(profile, results, db_conn)
+
+        if scored:
+            asset_count = _eager_generate_assets(profile, scored, db_conn)
+            _show_scored_table(source, scored, db_conn, asset_count)
+        else:
+            _show_unscored_table(source, results)
+    finally:
         db_conn.close()
-        return
-
-    console.print(f"[green]{len(results)} new opportunities found.[/green]")
-
-    # Score opportunities against profile
-    scored = _score_results(results, db_conn)
-    db_conn.close()
-
-    if scored:
-        table = Table(title=f"Results from {source} (scored)")
-        table.add_column("#", style="dim")
-        table.add_column("Company", style="cyan")
-        table.add_column("Title", style="green")
-        table.add_column("Location")
-        table.add_column("Score", justify="right")
-        table.add_column("Why", max_width=40)
-
-        for i, so in enumerate(scored, 1):
-            score_style = "bold green" if so.score >= 80 else ("yellow" if so.score >= 50 else "dim")
-            table.add_row(
-                str(i),
-                so.opportunity.company,
-                so.opportunity.title,
-                so.opportunity.location or "-",
-                f"[{score_style}]{so.score}[/{score_style}]",
-                so.justification,
-            )
-        console.print(table)
-        above_70 = sum(1 for s in scored if s.score >= 70)
-        console.print(
-            f"\n[green]{len(scored)} opportunities scored. "
-            f"{above_70} scored above 70.[/green]"
-        )
-    else:
-        # Fallback: show unscored results
-        table = Table(title=f"Results from {source}")
-        table.add_column("#", style="dim")
-        table.add_column("Company", style="cyan")
-        table.add_column("Title", style="green")
-        table.add_column("Location")
-        table.add_column("URL", style="blue")
-
-        for i, opp in enumerate(results, 1):
-            table.add_row(
-                str(i),
-                opp.company,
-                opp.title,
-                opp.location or "-",
-                opp.source_url or "-",
-            )
-        console.print(table)
-        console.print(f"\n[green]{len(results)} new opportunities saved (unscored).[/green]")
 
 
-def _score_results(results, db_conn):
+def _score_results(profile, results, db_conn):
     """Try to score results against the profile. Returns scored list or None."""
-    from emplaiyed.scoring import score_opportunities
-
-    profile_path = get_default_profile_path()
-    if not profile_path.exists():
+    if profile is None:
         console.print("[dim]No profile found — skipping scoring.[/dim]")
         return None
 
-    try:
-        profile = load_profile(profile_path)
-    except Exception as exc:
-        logger.warning("Failed to load profile for scoring: %s", exc)
-        return None
+    from emplaiyed.scoring import score_opportunities
 
     console.print("Scoring against your profile...")
     try:
-        scored = asyncio.run(
-            score_opportunities(profile, results, db_conn=db_conn)
-        )
-        return scored
+        return asyncio.run(score_opportunities(profile, results, db_conn=db_conn))
     except Exception as exc:
         logger.warning("Scoring failed: %s", exc)
         console.print(f"[yellow]Scoring failed: {exc}[/yellow]")
         return None
 
 
-def _derive_from_profile(
-    kw_list: list[str], location: str | None
-) -> tuple[list[str], str | None]:
-    """Try to load the profile and derive keywords + location."""
-    profile_path = get_default_profile_path()
-    if not profile_path.exists():
-        logger.debug("No profile found at %s", profile_path)
-        return kw_list, location
+def _eager_generate_assets(profile, scored, db_conn) -> int:
+    """Generate assets for top N scored opportunities. Returns count created."""
+    if profile is None:
+        return 0
 
+    from emplaiyed.generation.pipeline import generate_assets_batch
+
+    apps = list_applications(db_conn, status=ApplicationStatus.SCORED)
+    opp_to_app = {a.opportunity_id: a.id for a in apps}
+
+    scored_apps = [
+        (opp_to_app[so.opportunity.id], so.opportunity)
+        for so in scored
+        if so.opportunity.id in opp_to_app
+    ]
+
+    if not scored_apps:
+        return 0
+
+    console.print("Generating assets for top opportunities...")
     try:
-        profile = load_profile(profile_path)
+        results = asyncio.run(generate_assets_batch(db_conn, profile, scored_apps))
+        return len(results)
     except Exception as exc:
-        logger.warning("Failed to load profile: %s", exc)
-        return kw_list, location
+        logger.warning("Asset generation failed: %s", exc)
+        console.print(f"[yellow]Asset generation failed: {exc}[/yellow]")
+        return 0
 
-    # Derive keywords from target_roles + top skills
-    derived: list[str] = []
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit - 1] + "\u2026"
+
+
+def _show_scored_table(source, scored, db_conn, asset_count):
+    """Display scored results table."""
+    apps = list_applications(db_conn, status=ApplicationStatus.OUTREACH_PENDING)
+    asset_opp_ids = {a.opportunity_id for a in apps}
+    has_assets = bool(asset_opp_ids)
+
+    table = Table(title=f"Results from {source} (scored)")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Score", justify="right", width=5)
+    table.add_column("Company", style="cyan", max_width=20)
+    table.add_column("Title", style="green", max_width=25)
+    table.add_column("Location", max_width=15)
+    table.add_column("Why")
+    if has_assets:
+        table.add_column("Assets", justify="center", width=6)
+
+    for i, so in enumerate(scored, 1):
+        score_style = "bold green" if so.score >= 80 else ("yellow" if so.score >= 50 else "dim")
+        loc = _truncate(so.opportunity.location, 20) if so.opportunity.location else "-"
+        row = [
+            str(i),
+            f"[{score_style}]{so.score}[/{score_style}]",
+            so.opportunity.company,
+            so.opportunity.title,
+            loc,
+            _truncate(so.justification, 80),
+        ]
+        if has_assets:
+            row.append("Y" if so.opportunity.id in asset_opp_ids else "")
+        table.add_row(*row)
+
+    console.print(table)
+    above_70 = sum(1 for s in scored if s.score >= 70)
+    console.print(
+        f"\n[green]{len(scored)} opportunities scored. {above_70} scored above 70.[/green]"
+    )
+    if asset_count:
+        console.print(
+            f"[blue]{asset_count} work items created with generated assets.[/blue] "
+            f"Run `emplaiyed work list` to review."
+        )
+
+
+def _show_unscored_table(source, results):
+    """Display unscored results table."""
+    table = Table(title=f"Results from {source}")
+    table.add_column("#", style="dim")
+    table.add_column("Company", style="cyan")
+    table.add_column("Title", style="green")
+    table.add_column("Location")
+    table.add_column("URL", style="blue")
+
+    for i, opp in enumerate(results, 1):
+        table.add_row(str(i), opp.company, opp.title, opp.location or "-", opp.source_url or "-")
+
+    console.print(table)
+    console.print(f"\n[green]{len(results)} new opportunities saved (unscored).[/green]")
+
+
+def _derive_from_profile(profile, location):
+    """Derive keywords + location from a loaded profile."""
+    kw_list: list[str] = []
     if profile.aspirations and profile.aspirations.target_roles:
-        derived.extend(profile.aspirations.target_roles)
+        kw_list.extend(profile.aspirations.target_roles)
     if profile.skills:
-        derived.extend(profile.skills[:5])
-    if derived:
-        kw_list = derived
+        kw_list.extend(profile.skills[:5])
+    if kw_list:
         console.print(f"[dim]Derived keywords from profile: {', '.join(kw_list)}[/dim]")
-        logger.debug("Derived keywords: %s", kw_list)
 
-    # Derive location from geographic_preferences (skip "Remote")
     if location is None and profile.aspirations:
         for pref in profile.aspirations.geographic_preferences:
             if pref.lower().strip() != "remote":
                 location = pref
                 console.print(f"[dim]Derived location from profile: {location}[/dim]")
-                logger.debug("Derived location: %s", location)
                 break
 
     return kw_list, location
 
 
-def _derive_location_from_profile() -> str | None:
-    """Try to derive just the location from the profile."""
-    profile_path = get_default_profile_path()
-    if not profile_path.exists():
-        return None
-    try:
-        profile = load_profile(profile_path)
-    except Exception:
-        return None
-    if profile.aspirations:
-        for pref in profile.aspirations.geographic_preferences:
-            if pref.lower().strip() != "remote":
-                console.print(f"[dim]Derived location from profile: {pref}[/dim]")
-                return pref
-    return None
-
-
 def _probe_source_status(source) -> str:
-    """Return a human-readable status for a source.
-
-    Tries to call scrape() with an empty query. If it raises
-    NotImplementedError, the source is a stub.
-    """
+    """Return a human-readable status for a source."""
     try:
         asyncio.run(source.scrape(SearchQuery()))
         return "ready"

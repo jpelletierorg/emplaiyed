@@ -1,28 +1,17 @@
-"""Outreach CLI command — draft and send application emails."""
+"""Outreach CLI command — generate assets or draft emails for applications."""
 
 from __future__ import annotations
 
 import asyncio
-import logging
-from typing import Optional
 
 import typer
-from rich.console import Console
 from rich.panel import Panel
-from rich.table import Table
 
-from emplaiyed.core.database import (
-    get_default_db_path,
-    get_opportunity,
-    init_db,
-    list_applications,
-)
+from emplaiyed.cli import console, db_connection, require_profile
+from emplaiyed.core.database import get_opportunity, list_applications, list_work_items
 from emplaiyed.core.models import ApplicationStatus
-from emplaiyed.core.profile_store import get_default_profile_path, load_profile
+from emplaiyed.generation.pipeline import generate_assets_and_enqueue
 from emplaiyed.outreach import draft_outreach, send_outreach
-
-logger = logging.getLogger(__name__)
-console = Console()
 
 
 def outreach_command(
@@ -34,68 +23,67 @@ def outreach_command(
     ),
 ) -> None:
     """Draft and send outreach for top-scored opportunities."""
-    profile_path = get_default_profile_path()
-    if not profile_path.exists():
-        console.print("[red]No profile found. Run `emplaiyed profile build` first.[/red]")
-        raise typer.Exit(code=1)
+    profile = require_profile()
 
-    profile = load_profile(profile_path)
-    conn = init_db(get_default_db_path())
-
-    try:
+    with db_connection() as conn:
         apps = list_applications(conn, status=ApplicationStatus.SCORED)
         if not apps:
             console.print("[yellow]No scored applications ready for outreach.[/yellow]")
             return
 
-        # Filter by score threshold (score is stored in raw_data during scoring,
-        # but we don't persist score separately — so we process all SCORED apps)
-        targets = []
-        for app in apps:
-            opp = get_opportunity(conn, app.opportunity_id)
-            if opp:
-                targets.append((app, opp))
+        # Filter to apps that don't already have work items
+        apps_with_work = {w.application_id for w in list_work_items(conn)}
+        targets = [
+            (a, opp)
+            for a in apps
+            if a.id not in apps_with_work
+            for opp in [get_opportunity(conn, a.opportunity_id)]
+            if opp
+        ]
 
         if not targets:
-            console.print("[yellow]No opportunities found for outreach.[/yellow]")
+            console.print("[yellow]No opportunities need outreach (all have work items).[/yellow]")
             return
 
-        console.print(
-            f"Found [bold]{len(targets)}[/bold] scored opportunities. "
-            f"Preparing outreach...\n"
-        )
+        console.print(f"Found [bold]{len(targets)}[/bold] scored opportunities. Preparing...\n")
 
-        sent_count = 0
-        for i, (app, opp) in enumerate(targets, 1):
-            console.print(
-                f"[bold][{i}/{len(targets)}][/bold] {opp.company} — {opp.title}"
-            )
-
-            try:
-                draft = asyncio.run(draft_outreach(profile, opp))
-            except Exception as exc:
-                console.print(f"  [red]Failed to draft: {exc}[/red]")
-                continue
-
-            console.print(Panel(
-                f"[bold]Subject:[/bold] {draft.subject}\n\n{draft.body}",
-                title="Draft email",
-                border_style="blue",
-            ))
+        queued_count = 0
+        for i, (app_record, opp) in enumerate(targets, 1):
+            console.print(f"[bold][{i}/{len(targets)}][/bold] {opp.company} — {opp.title}")
 
             if auto_send:
-                send_outreach(conn, app.id, draft)
-                console.print("  [green]Sent (auto-send)[/green]\n")
-                sent_count += 1
-            else:
-                # In non-interactive mode (testing), just send
-                send_outreach(conn, app.id, draft)
-                console.print("  [green]Sent[/green]\n")
-                sent_count += 1
+                try:
+                    draft = asyncio.run(draft_outreach(profile, opp))
+                except Exception as exc:
+                    console.print(f"  [red]Failed to draft: {exc}[/red]")
+                    continue
 
-        if sent_count:
-            console.print(
-                f"\n[green]{sent_count} outreach emails sent.[/green]"
-            )
-    finally:
-        conn.close()
+                console.print(Panel(
+                    f"[bold]Subject:[/bold] {draft.subject}\n\n{draft.body}",
+                    title="Draft email",
+                    border_style="blue",
+                ))
+                send_outreach(conn, app_record.id, draft)
+                console.print("  [green]Sent (auto-send)[/green]\n")
+            else:
+                try:
+                    paths = asyncio.run(
+                        generate_assets_and_enqueue(conn, profile, opp, app_record.id)
+                    )
+                    console.print(
+                        f"  [blue]Assets generated + work item created[/blue]\n"
+                        f"  CV: {paths.cv_pdf}\n"
+                        f"  Letter: {paths.letter_pdf}\n"
+                    )
+                except Exception as exc:
+                    console.print(f"  [red]Failed: {exc}[/red]")
+                    continue
+
+            queued_count += 1
+
+        if queued_count:
+            action = "outreach emails sent" if auto_send else "work items created with assets"
+            color = "green" if auto_send else "blue"
+            console.print(f"\n[{color}]{queued_count} {action}.[/{color}]")
+            if not auto_send:
+                console.print("Run `emplaiyed work list` to see your queue.")

@@ -21,9 +21,12 @@ from emplaiyed.core.models import (
     InteractionType,
     Opportunity,
     Profile,
+    WorkItem,
+    WorkType,
 )
 from emplaiyed.llm.engine import complete_structured
 from emplaiyed.tracker.state_machine import can_transition, transition
+from emplaiyed.work.queue import create_work_item
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +116,17 @@ def send_followup(
     draft: FollowUpDraft,
     target_status: ApplicationStatus,
 ) -> None:
-    """Record the follow-up and transition the application."""
+    """Record the follow-up and transition the application.
+
+    Two-step for backward compat: if not already FOLLOW_UP_PENDING,
+    transitions through FOLLOW_UP_PENDING first.
+    """
+    from emplaiyed.core.database import get_application as _get_app
+
+    app = _get_app(db_conn, application_id)
+    if app and app.status != ApplicationStatus.FOLLOW_UP_PENDING:
+        transition(db_conn, application_id, ApplicationStatus.FOLLOW_UP_PENDING)
+
     interaction = Interaction(
         application_id=application_id,
         type=InteractionType.FOLLOW_UP,
@@ -125,3 +138,43 @@ def send_followup(
     save_interaction(db_conn, interaction)
     transition(db_conn, application_id, target_status)
     logger.debug("Follow-up sent for %s → %s", application_id, target_status.value)
+
+
+def enqueue_followup(
+    db_conn: sqlite3.Connection,
+    application_id: str,
+    opportunity: Opportunity,
+    draft: FollowUpDraft,
+    target_status: ApplicationStatus,
+    previous_status: ApplicationStatus,
+    followup_number: int,
+) -> WorkItem:
+    """Create a work item for the human to send the follow-up email.
+
+    Transitions the application to FOLLOW_UP_PENDING.
+    """
+    draft_text = f"Subject: {draft.subject}\n\n{draft.body}"
+
+    instructions = (
+        f"## Send follow-up #{followup_number} to {opportunity.company} — {opportunity.title}\n\n"
+        f"**Company:** {opportunity.company}\n"
+        f"**Role:** {opportunity.title}\n"
+        f"**Location:** {opportunity.location or 'Not specified'}\n\n"
+        f"### What to do\n"
+        f"1. Copy the follow-up email below\n"
+        f"2. Reply to your original outreach thread\n"
+        f"3. Run: `emplaiyed work done <id>`\n\n"
+        f"### Draft email\n\n{draft_text}"
+    )
+
+    return create_work_item(
+        db_conn,
+        application_id=application_id,
+        work_type=WorkType.FOLLOW_UP,
+        title=f"Send follow-up #{followup_number} to {opportunity.company} — {opportunity.title}",
+        instructions=instructions,
+        draft_content=draft_text,
+        target_status=target_status,
+        previous_status=previous_status,
+        pending_status=ApplicationStatus.FOLLOW_UP_PENDING,
+    )

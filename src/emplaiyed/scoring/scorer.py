@@ -7,6 +7,7 @@ skills, experience, aspirations, and location preferences. Returns a
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import sqlite3
 from datetime import datetime
@@ -22,6 +23,7 @@ from emplaiyed.core.models import (
     Profile,
     ScoredOpportunity,
 )
+from emplaiyed.core.prompt_helpers import format_skills
 from emplaiyed.llm.engine import complete_structured
 
 logger = logging.getLogger(__name__)
@@ -31,7 +33,9 @@ class _ScoreResult(BaseModel):
     """LLM output for a single scoring call."""
 
     score: int = Field(ge=0, le=100)
-    justification: str
+    justification: str = Field(max_length=120)
+    day_to_day: str
+    why_it_fits: str
 
 
 _SCORE_PROMPT = """\
@@ -47,7 +51,11 @@ Scoring criteria (weight each roughly equally):
 
 A score of 80+ means strong fit. 50-79 means partial fit. Below 50 means poor fit.
 
-Be concise in your justification (1 sentence).
+Your justification MUST be a single short sentence under 100 characters. No commas, no clauses.
+
+Also provide:
+- day_to_day: 2-3 sentence description of what the candidate would do day-to-day in this role, based on the job description
+- why_it_fits: 2-3 sentence explanation of why this role fits the candidate's profile and aspirations
 
 CANDIDATE PROFILE:
 - Name: {name}
@@ -69,7 +77,7 @@ OPPORTUNITY:
 
 def _build_score_prompt(profile: Profile, opportunity: Opportunity) -> str:
     """Build the scoring prompt from profile + opportunity data."""
-    skills = ", ".join(profile.skills[:15]) if profile.skills else "Not specified"
+    skills = format_skills(profile, limit=15)
 
     target_roles = "Not specified"
     location_prefs = "Not specified"
@@ -143,6 +151,8 @@ async def score_opportunity(
         opportunity=opportunity,
         score=result.score,
         justification=result.justification,
+        day_to_day=result.day_to_day,
+        why_it_fits=result.why_it_fits,
     )
 
 
@@ -160,25 +170,20 @@ async def score_opportunities(
 
     Returns scored opportunities sorted by score (highest first).
     """
-    scored: list[ScoredOpportunity] = []
-
-    for opp in opportunities:
+    async def _safe_score(opp: Opportunity) -> ScoredOpportunity:
         try:
-            so = await score_opportunity(
+            return await score_opportunity(
                 profile, opp, _model_override=_model_override
             )
-            scored.append(so)
         except Exception as exc:
             logger.warning("Failed to score %s at %s: %s", opp.title, opp.company, exc)
-            # Fall back to a zero score rather than dropping the opportunity
-            scored.append(
-                ScoredOpportunity(
-                    opportunity=opp,
-                    score=0,
-                    justification=f"Scoring failed: {exc}",
-                )
+            return ScoredOpportunity(
+                opportunity=opp,
+                score=0,
+                justification=f"Scoring failed: {exc}",
             )
 
+    scored = list(await asyncio.gather(*(_safe_score(opp) for opp in opportunities)))
     scored.sort(key=lambda s: s.score, reverse=True)
     logger.debug("Scored %d opportunities", len(scored))
 
@@ -188,6 +193,10 @@ async def score_opportunities(
             app = Application(
                 opportunity_id=so.opportunity.id,
                 status=ApplicationStatus.SCORED,
+                score=so.score,
+                justification=so.justification,
+                day_to_day=so.day_to_day,
+                why_it_fits=so.why_it_fits,
                 created_at=now,
                 updated_at=now,
             )

@@ -19,6 +19,7 @@ from emplaiyed.core.database import (
     list_applications,
     list_interactions,
     list_offers,
+    list_pending_work_items,
     list_upcoming_events,
     save_application,
     save_event,
@@ -39,13 +40,16 @@ from emplaiyed.core.models import (
 from emplaiyed.followup.agent import (
     find_stale_applications,
     draft_followup,
+    enqueue_followup,
     send_followup,
 )
+from emplaiyed.generation.pipeline import generate_assets
 from emplaiyed.negotiation.advisor import generate_negotiation
-from emplaiyed.outreach.drafter import draft_outreach, send_outreach
+from emplaiyed.outreach.drafter import draft_outreach, enqueue_outreach, send_outreach
 from emplaiyed.prep.agent import generate_prep
 from emplaiyed.scoring.scorer import score_opportunities
 from emplaiyed.tracker.state_machine import transition
+from emplaiyed.work.queue import complete_work_item
 
 
 @pytest.fixture
@@ -137,7 +141,7 @@ class TestHappyPath:
         apps = list_applications(db, status=ApplicationStatus.SCORED)
         assert len(apps) == 3
 
-        # ---- Step 3: Outreach for top opportunities ----
+        # ---- Step 3: Outreach via work queue ----
         # Pick the top scored opportunity
         top = scored[0]
         top_app = next(
@@ -148,7 +152,13 @@ class TestHappyPath:
         assert draft.subject
         assert draft.body
 
-        send_outreach(db, top_app.id, draft)
+        # Enqueue → assert PENDING
+        work_item = enqueue_outreach(db, top_app.id, top.opportunity, draft)
+        updated_app = get_application(db, top_app.id)
+        assert updated_app.status == ApplicationStatus.OUTREACH_PENDING
+
+        # Complete → assert OUTREACH_SENT
+        complete_work_item(db, work_item.id)
         updated_app = get_application(db, top_app.id)
         assert updated_app.status == ApplicationStatus.OUTREACH_SENT
 
@@ -156,8 +166,7 @@ class TestHappyPath:
         interactions = list_interactions(db, top_app.id)
         assert len(interactions) == 1
 
-        # ---- Step 4: Follow-up (simulate time passing) ----
-        # Manually backdate the application to trigger follow-up
+        # ---- Step 4: Follow-up via work queue (simulate time passing) ----
         old_time = datetime.now() - timedelta(days=7)
         backdated = updated_app.model_copy(update={"updated_at": old_time})
         save_application(db, backdated)
@@ -168,8 +177,19 @@ class TestHappyPath:
         fu_draft = await draft_followup(
             profile, top.opportunity, 1, 7, _model_override=model
         )
-        send_followup(db, top_app.id, fu_draft, ApplicationStatus.FOLLOW_UP_1)
 
+        # Enqueue follow-up → assert FOLLOW_UP_PENDING
+        fu_item = enqueue_followup(
+            db, top_app.id, top.opportunity, fu_draft,
+            target_status=ApplicationStatus.FOLLOW_UP_1,
+            previous_status=ApplicationStatus.OUTREACH_SENT,
+            followup_number=1,
+        )
+        updated_app = get_application(db, top_app.id)
+        assert updated_app.status == ApplicationStatus.FOLLOW_UP_PENDING
+
+        # Complete → assert FOLLOW_UP_1
+        complete_work_item(db, fu_item.id)
         updated_app = get_application(db, top_app.id)
         assert updated_app.status == ApplicationStatus.FOLLOW_UP_1
 
@@ -211,7 +231,7 @@ class TestHappyPath:
         assert len(offers) == 1
         assert offers[0].salary == 115000
 
-        # ---- Step 8: Negotiate ----
+        # ---- Step 8: Negotiate (backward compat path for simplicity) ----
         strategy = await generate_negotiation(
             profile, top.opportunity, offer, _model_override=model
         )
@@ -225,7 +245,7 @@ class TestHappyPath:
         updated_offer = offer.model_copy(update={"salary": 122000})
         save_offer(db, updated_offer)
 
-        # ---- Step 9: Accept ----
+        # ---- Step 9: Accept (backward compat path) ----
         transition(db, top_app.id, ApplicationStatus.ACCEPTED)
         final_app = get_application(db, top_app.id)
         assert final_app.status == ApplicationStatus.ACCEPTED
@@ -245,3 +265,54 @@ class TestHappyPath:
         # Interactions recorded for the accepted app
         all_interactions = list_interactions(db, top_app.id)
         assert len(all_interactions) == 2  # outreach + follow-up
+
+    async def test_asset_generation(self, profile, db, opportunities, tmp_path):
+        """Asset generation creates CV + letter files."""
+        model = TestModel()
+
+        # Save opportunity
+        save_opportunity(db, opportunities[0])
+
+        # Generate assets
+        paths = await generate_assets(
+            profile, opportunities[0], "test-app",
+            _model_override=model,
+            asset_dir=tmp_path / "assets" / "test-app",
+        )
+
+        assert paths.cv_md.exists()
+        assert paths.cv_pdf.exists()
+        assert paths.letter_md.exists()
+        assert paths.letter_pdf.exists()
+
+        # CV markdown has content
+        cv_text = paths.cv_md.read_text()
+        assert len(cv_text) > 0
+
+        # PDF files are valid
+        assert paths.cv_pdf.read_bytes()[:5] == b"%PDF-"
+        assert paths.letter_pdf.read_bytes()[:5] == b"%PDF-"
+
+    async def test_passed_state(self, profile, db, opportunities):
+        """SCORED applications can be marked as PASSED (terminal)."""
+        model = TestModel()
+
+        for opp in opportunities:
+            save_opportunity(db, opp)
+
+        scored = await score_opportunities(
+            profile, opportunities, db_conn=db, _model_override=model
+        )
+        apps = list_applications(db, status=ApplicationStatus.SCORED)
+        assert len(apps) == 3
+
+        # Pass the lowest scored opportunity
+        low_app = apps[-1]
+        transition(db, low_app.id, ApplicationStatus.PASSED)
+
+        passed_app = get_application(db, low_app.id)
+        assert passed_app.status == ApplicationStatus.PASSED
+
+        # Verify remaining apps still SCORED
+        still_scored = list_applications(db, status=ApplicationStatus.SCORED)
+        assert len(still_scored) == 2

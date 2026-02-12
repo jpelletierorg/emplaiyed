@@ -15,6 +15,9 @@ from emplaiyed.core.models import (
     OfferStatus,
     Opportunity,
     ScheduledEvent,
+    WorkItem,
+    WorkStatus,
+    WorkType,
 )
 
 # ---------------------------------------------------------------------------
@@ -81,7 +84,29 @@ CREATE TABLE IF NOT EXISTS scheduled_events (
     created_at      TEXT NOT NULL,
     FOREIGN KEY (application_id) REFERENCES applications(id)
 );
+
+CREATE TABLE IF NOT EXISTS work_items (
+    id              TEXT PRIMARY KEY,
+    application_id  TEXT NOT NULL,
+    work_type       TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'PENDING',
+    title           TEXT NOT NULL,
+    instructions    TEXT NOT NULL,
+    draft_content   TEXT,
+    target_status   TEXT NOT NULL,
+    previous_status TEXT NOT NULL,
+    created_at      TEXT NOT NULL,
+    completed_at    TEXT,
+    FOREIGN KEY (application_id) REFERENCES applications(id)
+);
 """
+
+_MIGRATIONS = [
+    "ALTER TABLE applications ADD COLUMN score INTEGER",
+    "ALTER TABLE applications ADD COLUMN justification TEXT",
+    "ALTER TABLE applications ADD COLUMN day_to_day TEXT",
+    "ALTER TABLE applications ADD COLUMN why_it_fits TEXT",
+]
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -125,17 +150,20 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
     conn.executescript(_SCHEMA)
+    for stmt in _MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
     conn.commit()
     return conn
 
 
 def get_default_db_path() -> Path:
     """Return ``data/emplaiyed.db`` relative to the project root."""
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        if (parent / "pyproject.toml").exists():
-            return parent / "data" / "emplaiyed.db"
-    return Path(__file__).resolve().parents[3] / "data" / "emplaiyed.db"
+    from emplaiyed.core.paths import find_project_root
+
+    return find_project_root() / "data" / "emplaiyed.db"
 
 
 # ---------------------------------------------------------------------------
@@ -218,13 +246,18 @@ def save_application(conn: sqlite3.Connection, application: Application) -> None
     conn.execute(
         """
         INSERT OR REPLACE INTO applications
-            (id, opportunity_id, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
+            (id, opportunity_id, status, score, justification,
+             day_to_day, why_it_fits, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             application.id,
             application.opportunity_id,
             application.status.value,
+            application.score,
+            application.justification,
+            application.day_to_day,
+            application.why_it_fits,
             _datetime_to_str(application.created_at),
             _datetime_to_str(application.updated_at),
         ),
@@ -237,6 +270,10 @@ def _row_to_application(row: sqlite3.Row) -> Application:
         id=row["id"],
         opportunity_id=row["opportunity_id"],
         status=ApplicationStatus(row["status"]),
+        score=row["score"],
+        justification=row["justification"],
+        day_to_day=row["day_to_day"],
+        why_it_fits=row["why_it_fits"],
         created_at=_str_to_datetime(row["created_at"]),  # type: ignore[arg-type]
         updated_at=_str_to_datetime(row["updated_at"]),  # type: ignore[arg-type]
     )
@@ -467,3 +504,84 @@ def list_upcoming_events(conn: sqlite3.Connection) -> list[ScheduledEvent]:
 def delete_event(conn: sqlite3.Connection, id: str) -> None:
     conn.execute("DELETE FROM scheduled_events WHERE id = ?", (id,))
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Work Item CRUD
+# ---------------------------------------------------------------------------
+
+
+def save_work_item(conn: sqlite3.Connection, item: WorkItem) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO work_items
+            (id, application_id, work_type, status, title, instructions,
+             draft_content, target_status, previous_status, created_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item.id,
+            item.application_id,
+            item.work_type.value,
+            item.status.value,
+            item.title,
+            item.instructions,
+            item.draft_content,
+            item.target_status,
+            item.previous_status,
+            _datetime_to_str(item.created_at),
+            _datetime_to_str(item.completed_at),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_work_item(row: sqlite3.Row) -> WorkItem:
+    return WorkItem(
+        id=row["id"],
+        application_id=row["application_id"],
+        work_type=WorkType(row["work_type"]),
+        status=WorkStatus(row["status"]),
+        title=row["title"],
+        instructions=row["instructions"],
+        draft_content=row["draft_content"],
+        target_status=row["target_status"],
+        previous_status=row["previous_status"],
+        created_at=_str_to_datetime(row["created_at"]),  # type: ignore[arg-type]
+        completed_at=_str_to_datetime(row["completed_at"]),
+    )
+
+
+def get_work_item(conn: sqlite3.Connection, id: str) -> WorkItem | None:
+    cur = conn.execute("SELECT * FROM work_items WHERE id = ?", (id,))
+    row = cur.fetchone()
+    return _row_to_work_item(row) if row else None
+
+
+def list_work_items(conn: sqlite3.Connection, **filters: Any) -> list[WorkItem]:
+    query = "SELECT * FROM work_items"
+    params: list[Any] = []
+    clauses: list[str] = []
+
+    for col, val in filters.items():
+        if col == "status" and isinstance(val, WorkStatus):
+            clauses.append("status = ?")
+            params.append(val.value)
+        elif col == "work_type" and isinstance(val, WorkType):
+            clauses.append("work_type = ?")
+            params.append(val.value)
+        else:
+            clauses.append(f"{col} = ?")
+            params.append(val)
+
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+
+    query += " ORDER BY created_at ASC"
+    cur = conn.execute(query, params)
+    return [_row_to_work_item(row) for row in cur.fetchall()]
+
+
+def list_pending_work_items(conn: sqlite3.Connection) -> list[WorkItem]:
+    """Return all PENDING work items, oldest first."""
+    return list_work_items(conn, status=WorkStatus.PENDING)

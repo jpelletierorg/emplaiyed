@@ -26,9 +26,13 @@ from emplaiyed.core.models import (
     InteractionType,
     Opportunity,
     Profile,
+    WorkItem,
+    WorkType,
 )
+from emplaiyed.core.prompt_helpers import format_recent_role, format_skills
 from emplaiyed.llm.engine import complete_structured
 from emplaiyed.tracker.state_machine import transition
+from emplaiyed.work.queue import create_work_item
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +77,14 @@ async def draft_outreach(
     _model_override: Model | None = None,
 ) -> OutreachDraft:
     """Generate an outreach email draft for an opportunity."""
-    recent_role = "Not specified"
-    if profile.employment_history:
-        e = profile.employment_history[0]
-        recent_role = f"{e.title} at {e.company}"
-
     target_roles = "Not specified"
     if profile.aspirations and profile.aspirations.target_roles:
         target_roles = ", ".join(profile.aspirations.target_roles)
 
     prompt = _OUTREACH_PROMPT.format(
         name=profile.name,
-        skills=", ".join(profile.skills[:10]) if profile.skills else "Not specified",
-        recent_role=recent_role,
+        skills=format_skills(profile),
+        recent_role=format_recent_role(profile),
         target_roles=target_roles,
         company=opportunity.company,
         title=opportunity.title,
@@ -106,9 +105,16 @@ def send_outreach(
 ) -> None:
     """Record the outreach as an interaction and transition to OUTREACH_SENT.
 
-    In a real implementation this would send the email via SMTP.
-    For now it records the intent and transitions the state.
+    Two-step for backward compat: if application is in SCORED, goes
+    SCORED→OUTREACH_PENDING→OUTREACH_SENT. If already OUTREACH_PENDING,
+    goes directly to OUTREACH_SENT.
     """
+    from emplaiyed.core.database import get_application as _get_app
+
+    app = _get_app(db_conn, application_id)
+    if app and app.status == ApplicationStatus.SCORED:
+        transition(db_conn, application_id, ApplicationStatus.OUTREACH_PENDING)
+
     interaction = Interaction(
         application_id=application_id,
         type=InteractionType.EMAIL_SENT,
@@ -120,3 +126,41 @@ def send_outreach(
     save_interaction(db_conn, interaction)
     transition(db_conn, application_id, ApplicationStatus.OUTREACH_SENT)
     logger.debug("Outreach sent for application %s", application_id)
+
+
+def enqueue_outreach(
+    db_conn: sqlite3.Connection,
+    application_id: str,
+    opportunity: Opportunity,
+    draft: OutreachDraft,
+) -> WorkItem:
+    """Create a work item for the human to send the outreach email.
+
+    Transitions the application from SCORED → OUTREACH_PENDING.
+    """
+    draft_text = f"Subject: {draft.subject}\n\n{draft.body}"
+
+    instructions = (
+        f"## Send outreach to {opportunity.company} — {opportunity.title}\n\n"
+        f"**Company:** {opportunity.company}\n"
+        f"**Role:** {opportunity.title}\n"
+        f"**Location:** {opportunity.location or 'Not specified'}\n\n"
+        f"### What to do\n"
+        f"1. Copy the email draft below\n"
+        f"2. Open your email client and compose a new message\n"
+        f"3. Send to the hiring contact (check job posting for email)\n"
+        f"4. Run: `emplaiyed work done <id>`\n\n"
+        f"### Draft email\n\n{draft_text}"
+    )
+
+    return create_work_item(
+        db_conn,
+        application_id=application_id,
+        work_type=WorkType.OUTREACH,
+        title=f"Send outreach to {opportunity.company} — {opportunity.title}",
+        instructions=instructions,
+        draft_content=draft_text,
+        target_status=ApplicationStatus.OUTREACH_SENT,
+        previous_status=ApplicationStatus.SCORED,
+        pending_status=ApplicationStatus.OUTREACH_PENDING,
+    )

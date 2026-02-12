@@ -92,8 +92,8 @@ class TestScanProfileDerived:
     def test_derives_keywords_from_profile(self):
         """When --keywords omitted, derive from profile aspirations + skills."""
         profile = _mock_profile()
-        with patch("emplaiyed.cli.sources_cmd.get_default_profile_path") as mock_path, \
-             patch("emplaiyed.cli.sources_cmd.load_profile", return_value=profile):
+        with patch("emplaiyed.cli.get_default_profile_path") as mock_path, \
+             patch("emplaiyed.cli.load_profile", return_value=profile):
             mock_path.return_value.exists.return_value = True
             result = runner.invoke(
                 app, ["sources", "scan", "--source", "manual"]
@@ -104,8 +104,8 @@ class TestScanProfileDerived:
     def test_derives_location_from_profile(self):
         """When --location omitted, derive from geographic_preferences (skip Remote)."""
         profile = _mock_profile()
-        with patch("emplaiyed.cli.sources_cmd.get_default_profile_path") as mock_path, \
-             patch("emplaiyed.cli.sources_cmd.load_profile", return_value=profile):
+        with patch("emplaiyed.cli.get_default_profile_path") as mock_path, \
+             patch("emplaiyed.cli.load_profile", return_value=profile):
             mock_path.return_value.exists.return_value = True
             result = runner.invoke(
                 app, ["sources", "scan", "--source", "manual"]
@@ -116,7 +116,7 @@ class TestScanProfileDerived:
 
     def test_error_when_no_keywords_and_no_profile(self):
         """Error with helpful message when no keywords and no profile exists."""
-        with patch("emplaiyed.cli.sources_cmd.get_default_profile_path") as mock_path:
+        with patch("emplaiyed.cli.get_default_profile_path") as mock_path:
             mock_path.return_value.exists.return_value = False
             result = runner.invoke(
                 app, ["sources", "scan", "--source", "manual"]
@@ -136,8 +136,8 @@ class TestScanProfileDerived:
     def test_explicit_location_overrides_profile(self):
         """When --location is provided, it should be used as-is."""
         profile = _mock_profile()
-        with patch("emplaiyed.cli.sources_cmd.get_default_profile_path") as mock_path, \
-             patch("emplaiyed.cli.sources_cmd.load_profile", return_value=profile):
+        with patch("emplaiyed.cli.get_default_profile_path") as mock_path, \
+             patch("emplaiyed.cli.load_profile", return_value=profile):
             mock_path.return_value.exists.return_value = True
             result = runner.invoke(
                 app,

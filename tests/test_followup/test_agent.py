@@ -22,9 +22,11 @@ from emplaiyed.core.models import (
     Opportunity,
     Profile,
 )
+from emplaiyed.core.database import get_work_item, list_pending_work_items
 from emplaiyed.followup.agent import (
     FollowUpDraft,
     draft_followup,
+    enqueue_followup,
     find_stale_applications,
     send_followup,
 )
@@ -105,6 +107,7 @@ class TestDraftFollowup:
 
 class TestSendFollowup:
     def test_records_and_transitions(self, tmp_path: Path):
+        """send_followup does two-step: OUTREACH_SENT→FOLLOW_UP_PENDING→FOLLOW_UP_1."""
         db_conn = init_db(tmp_path / "test.db")
         opp = _test_opportunity()
         save_opportunity(db_conn, opp)
@@ -126,4 +129,44 @@ class TestSendFollowup:
 
         apps = list_applications(db_conn)
         assert apps[0].status == ApplicationStatus.FOLLOW_UP_1
+        db_conn.close()
+
+
+class TestEnqueueFollowup:
+    def test_creates_work_item_and_transitions_to_pending(self, tmp_path: Path):
+        db_conn = init_db(tmp_path / "test.db")
+        opp = _test_opportunity()
+        save_opportunity(db_conn, opp)
+
+        old_time = datetime.now() - timedelta(days=7)
+        app = Application(
+            opportunity_id=opp.id,
+            status=ApplicationStatus.OUTREACH_SENT,
+            created_at=old_time,
+            updated_at=old_time,
+        )
+        save_application(db_conn, app)
+
+        draft = FollowUpDraft(subject="Following up", body="Just checking in.")
+        item = enqueue_followup(
+            db_conn, app.id, opp, draft,
+            target_status=ApplicationStatus.FOLLOW_UP_1,
+            previous_status=ApplicationStatus.OUTREACH_SENT,
+            followup_number=1,
+        )
+
+        # Application should be in FOLLOW_UP_PENDING
+        apps = list_applications(db_conn)
+        assert apps[0].status == ApplicationStatus.FOLLOW_UP_PENDING
+
+        # Work item should exist
+        loaded = get_work_item(db_conn, item.id)
+        assert loaded is not None
+        assert loaded.target_status == "FOLLOW_UP_1"
+        assert loaded.previous_status == "OUTREACH_SENT"
+        assert "Following up" in loaded.draft_content
+
+        pending = list_pending_work_items(db_conn)
+        assert len(pending) == 1
+
         db_conn.close()
