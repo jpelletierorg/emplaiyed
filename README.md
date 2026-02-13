@@ -1,8 +1,8 @@
 # emplaiyed
 
-AI-powered CLI toolkit that automates your job search. It builds your profile, finds opportunities, applies on your behalf, prepares you for interviews, and helps you negotiate offers — with as little manual effort as possible.
+AI-powered CLI toolkit that automates your job search pipeline. Build your profile from a CV, scan job boards, score opportunities against your fit, generate tailored CVs and cover letters, track applications through a TUI console, and manage the full lifecycle from outreach to offer acceptance.
 
-## Installation
+## Quick Start
 
 Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
@@ -14,46 +14,88 @@ cp .env.template .env
 uv sync
 ```
 
-## Usage
+## Workflow
+
+### 1. Build your profile
 
 ```bash
-# Show available commands
-emplaiyed --help
+emplaiyed profile build          # Interactive — can ingest a PDF CV
+emplaiyed profile show           # Review what was extracted
+emplaiyed profile enhance        # Enrich highlights with quantified achievements
+```
 
-# Build your profile (interactive, can ingest your CV)
-emplaiyed profile build
+### 2. Scan for opportunities
 
-# Show your profile
-emplaiyed profile show
+```bash
+emplaiyed sources list           # Show available job sources
+emplaiyed sources scan           # Scrape, score, and rank opportunities
+```
 
-# Scan job sources
-emplaiyed sources scan
+### 3. Review and act on opportunities
 
-# View your application funnel
-emplaiyed funnel status
-emplaiyed funnel list --stage INTERVIEW_SCHEDULED
-emplaiyed funnel show <application_id>
+The **console** is the primary interface — a terminal UI for reviewing, applying, and managing applications across pipeline stages:
 
-# Prepare for an upcoming interview
-emplaiyed prep <application_id>
+```bash
+emplaiyed console
+```
 
-# Manage offers
-emplaiyed offers list
-emplaiyed offers compare
-emplaiyed negotiate <application_id>
+The console organizes applications into tabs: **Queue** (scored, ready to apply), **Applied** (outreach sent, follow-ups), **Active** (interviews), **Offers**, **Closed**, and **Funnel** (stats dashboard). Keyboard-driven: `j`/`k` navigate, `d` marks done, `r` records responses, `f` logs follow-ups, `s` schedules interviews, `o` records offers, and more.
 
-# Accept an offer
-emplaiyed accept <application_id>
+You can also manage applications from the CLI:
+
+```bash
+emplaiyed funnel status          # Pipeline stage counts
+emplaiyed funnel list            # All applications (filterable by stage)
+emplaiyed funnel show <app-id>   # Full detail for one application
+
+emplaiyed work list              # Pending work items
+emplaiyed work next              # Show next item to act on
+emplaiyed work done <item-id>    # Complete a work item
+```
+
+### 4. Interviews and offers
+
+```bash
+emplaiyed prep <app-id>          # Generate interview prep cheat sheet
+emplaiyed schedule <app-id>      # Schedule an interview event
+emplaiyed calendar               # Show upcoming events
+
+emplaiyed offers                 # List pending offers
+emplaiyed negotiate <app-id>     # Generate negotiation strategy
+emplaiyed accept <app-id>        # Accept and generate acceptance email
+```
+
+### 5. Outreach automation
+
+```bash
+emplaiyed outreach               # Draft and send outreach for top opportunities
+emplaiyed followup               # Check for and send follow-ups
 ```
 
 ## Configuration
 
-Copy `.env.template` to `.env` and fill in:
+Copy `.env.template` to `.env` and set:
 
 | Variable | Required | Description |
 |---|---|---|
-| `OPENROUTER_API_KEY` | Yes | API key for LLM access via OpenRouter |
-| `SMTP_HOST` | Later | Email server hostname (collected during profile build) |
-| `SMTP_PORT` | Later | Email server port |
-| `SMTP_USER` | Later | Email login |
-| `SMTP_PASSWORD` | Later | Email password |
+| `OPENROUTER_API_KEY` | Yes | API key for LLM access via [OpenRouter](https://openrouter.ai) |
+
+SMTP settings for email outreach are collected during `profile build`.
+
+## Architecture
+
+- **Profile**: YAML file (`data/profile.yaml`) — human-readable, editable, fits in LLM context
+- **State**: SQLite database (`data/emplaiyed.db`) — applications, interactions, events, transitions
+- **Assets**: Generated CVs and cover letters per application (`data/assets/<app-id>/`)
+- **LLM**: [Pydantic AI](https://ai.pydantic.dev/) + OpenRouter — structured outputs, model-agnostic
+- **Console**: [Textual](https://textual.textualize.io/) TUI with vim-style keybindings
+- **CLI**: [Typer](https://typer.tiangolo.com/) + [Rich](https://rich.readthedocs.io/)
+
+## Development
+
+```bash
+uv run pytest                    # Run the full test suite
+uv run pytest tests/test_console # Console tests only
+uv run emplaiyed --debug ...     # Enable debug logging
+emplaiyed reset                  # Wipe database and assets to start fresh
+```
