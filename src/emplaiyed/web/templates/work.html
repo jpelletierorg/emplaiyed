@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Work Queue - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Work Queue</h1>
+    <span class="badge badge-lg badge-warning">{{ work_items|length }} pending</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Human-in-the-loop tasks pending your review. Complete or skip each item.
+  </p>
+
+  {% if work_items %}
+  <div class="space-y-4">
+    {% for item in work_items %}
+    <div class="card bg-base-100 shadow">
+      <div class="card-body">
+        <!-- Header row: title + work type + company info -->
+        <div class="flex items-start justify-between gap-4">
+          <div>
+            <h2 class="card-title text-lg">{{ item.wi.title }}</h2>
+            {% if item.opp %}
+            <p class="text-sm text-base-content/60">
+              {{ item.opp.company }} &mdash; {{ item.opp.title }}
+            </p>
+            {% endif %}
+          </div>
+          <div class="flex items-center gap-2">
+            <span class="badge badge-ghost">{{ item.wi.work_type.value }}</span>
+            {% if item.app and item.app.score is not none %}
+            <span class="badge badge-outline
+              {% if item.app.score >= 70 %}text-success
+              {% elif item.app.score >= 40 %}text-warning
+              {% else %}text-error{% endif %}
+            ">{{ item.app.score }}</span>
+            {% endif %}
+          </div>
+        </div>
+
+        <!-- Instructions (collapsible if long) -->
+        {% if item.wi.instructions %}
+        <details class="mt-2">
+          <summary class="cursor-pointer text-sm text-base-content/70">
+            {{ item.wi.instructions[:120] }}{% if item.wi.instructions|length > 120 %}...{% endif %}
+          </summary>
+          <div class="mt-2 prose prose-sm max-w-none text-base-content/80 whitespace-pre-line">{{ item.wi.instructions }}</div>
+        </details>
+        {% endif %}
+
+        <!-- Draft content (if available) -->
+        {% if item.wi.draft_content %}
+        <details class="mt-2">
+          <summary class="cursor-pointer text-sm text-primary">View Draft</summary>
+          <div class="mt-2 bg-base-200 p-3 rounded-lg">
+            <pre class="text-sm whitespace-pre-wrap font-mono">{{ item.wi.draft_content }}</pre>
+          </div>
+        </details>
+        {% endif %}
+
+        <!-- Action buttons -->
+        <div class="card-actions justify-end mt-3">
+          {% if item.app %}
+          <a href="/applications/{{ item.app.id }}" class="btn btn-ghost btn-sm">View Application</a>
+          {% endif %}
+          <button class="btn btn-outline btn-sm"
+            hx-post="/api/work-items/{{ item.wi.id }}/skip"
+            hx-target="main"
+            hx-swap="innerHTML"
+            hx-confirm="Skip this task and revert the application?"
+          >Skip</button>
+          <button class="btn btn-primary btn-sm"
+            hx-post="/api/work-items/{{ item.wi.id }}/complete"
+            hx-target="main"
+            hx-swap="innerHTML"
+            hx-confirm="Mark as done and advance the application?"
+          >Done</button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center py-16 text-base-content/40">
+    <p class="text-lg">No pending work items. All caught up!</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

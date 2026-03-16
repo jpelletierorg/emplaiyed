@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+
+{% block title %}Calendar - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Calendar</h1>
+    <span class="badge badge-lg badge-accent">{{ events|length }} upcoming</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Upcoming interviews, follow-up deadlines, and scheduled events.
+  </p>
+
+  {% if events %}
+  <div class="space-y-3">
+    {% for item in events %}
+    <div class="card bg-base-100 shadow">
+      <div class="card-body py-4">
+        <div class="flex items-center justify-between gap-4">
+          <div class="flex items-center gap-4">
+            <!-- Date display -->
+            <div class="text-center min-w-[60px]">
+              <div class="text-xs text-base-content/50 uppercase">
+                {{ item.event.scheduled_date.strftime("%b") }}
+              </div>
+              <div class="text-2xl font-bold">
+                {{ item.event.scheduled_date.strftime("%d") }}
+              </div>
+              <div class="text-xs text-base-content/50">
+                {{ item.event.scheduled_date.strftime("%H:%M") }}
+              </div>
+            </div>
+            <!-- Event info -->
+            <div>
+              <div class="flex items-center gap-2">
+                <span class="badge badge-sm badge-accent">{{ item.event.event_type | replace("_", " ") | title }}</span>
+                {% if item.opp %}
+                <span class="font-medium">{{ item.opp.company }}</span>
+                <span class="text-base-content/50">&mdash;</span>
+                <span class="text-sm text-base-content/70">{{ item.opp.title }}</span>
+                {% endif %}
+              </div>
+              {% if item.event.notes %}
+              <p class="text-sm text-base-content/60 mt-1">{{ item.event.notes }}</p>
+              {% endif %}
+            </div>
+          </div>
+          {% if item.app %}
+          <a href="/applications/{{ item.app.id }}" class="btn btn-ghost btn-sm">View</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="text-center py-16 text-base-content/40">
+    <p class="text-lg">No upcoming events scheduled.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -21,20 +21,57 @@ from emplaiyed.core.profile_store import get_default_profile_path, load_profile
 from emplaiyed.generation.config import EAGER_TOP_N
 from emplaiyed.generation.cv_generator import GeneratedCV, generate_cv
 from emplaiyed.generation.letter_generator import GeneratedLetter, generate_letter
-from emplaiyed.rendering.markdown_renderer import write_cv_markdown, write_letter_markdown
-from emplaiyed.rendering.pdf_renderer import render_cv_pdf, render_letter_pdf
+from emplaiyed.llm.config import DEFAULT_MODEL
+from emplaiyed.llm.engine import complete
+from emplaiyed.rendering.markdown_renderer import (
+    write_cv_markdown,
+    write_letter_markdown,
+)
+from emplaiyed.rendering.html_renderer import render_cv_pdf, render_letter_pdf
+from emplaiyed.rendering.docx_renderer import render_cv_docx, render_letter_docx
 from emplaiyed.work.queue import create_work_item
 
 logger = logging.getLogger(__name__)
+
+_TRANSIENT_TERMS = ("connection", "timeout", "network", "unreachable")
+
+
+def _is_transient(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return any(t in msg for t in _TRANSIENT_TERMS)
+
+
+async def detect_language(
+    description: str,
+    *,
+    _model_override: Model | None = None,
+) -> str:
+    """Detect the language of a job description via a cheap LLM call.
+
+    Returns ``"French"`` or ``"English"``.
+    """
+    prompt = (
+        "What language is this job description written in? "
+        "Reply with exactly one word: 'English' or 'French'.\n\n"
+        f"{description}"
+    )
+    raw = await complete(prompt, model=DEFAULT_MODEL, _model_override=_model_override)
+    lang = raw.strip().strip(".")
+    if "french" in lang.lower() or "français" in lang.lower():
+        return "French"
+    return "English"
 
 
 @dataclass
 class AssetPaths:
     """Paths to the generated assets for one application."""
+
     cv_md: Path
     cv_pdf: Path
+    cv_docx: Path
     letter_md: Path
     letter_pdf: Path
+    letter_docx: Path
 
 
 def get_asset_dir(app_id: str) -> Path:
@@ -80,23 +117,42 @@ async def generate_assets(
     """
     out = asset_dir or get_asset_dir(app_id)
 
-    # Generate CV and letter concurrently
+    # Detect language once, pass to both generators for consistency.
+    language = await detect_language(
+        opportunity.description,
+        _model_override=_model_override,
+    )
+
     cv, letter_obj = await asyncio.gather(
-        generate_cv(profile, opportunity, _model_override=_model_override),
-        generate_letter(profile, opportunity, _model_override=_model_override),
+        generate_cv(
+            profile,
+            opportunity,
+            language=language,
+            _model_override=_model_override,
+        ),
+        generate_letter(
+            profile,
+            opportunity,
+            language=language,
+            _model_override=_model_override,
+        ),
     )
 
     # Render to all formats
     paths = AssetPaths(
         cv_md=out / "cv.md",
         cv_pdf=out / "cv.pdf",
+        cv_docx=out / "cv.docx",
         letter_md=out / "letter.md",
         letter_pdf=out / "letter.pdf",
+        letter_docx=out / "letter.docx",
     )
     write_cv_markdown(cv, paths.cv_md)
     render_cv_pdf(cv, paths.cv_pdf)
+    render_cv_docx(cv, paths.cv_docx)
     write_letter_markdown(letter_obj, paths.letter_md)
-    render_letter_pdf(letter_obj, paths.letter_pdf)
+    render_letter_pdf(letter_obj, paths.letter_pdf, profile=profile)
+    render_letter_docx(letter_obj, paths.letter_docx, profile=profile)
 
     logger.debug("Assets generated for %s in %s", app_id, out)
     return paths
@@ -113,11 +169,15 @@ def _build_work_instructions(
         lines.append(f"**Apply here:** {opportunity.source_url}")
         lines.append("")
 
-    lines.extend([
-        "### Assets",
-        f"- CV:     {paths.cv_pdf}",
-        f"- Letter: {paths.letter_pdf}",
-    ])
+    lines.extend(
+        [
+            "### Assets",
+            f"- CV (PDF):      {paths.cv_pdf}",
+            f"- CV (DOCX):     {paths.cv_docx}",
+            f"- Letter (PDF):  {paths.letter_pdf}",
+            f"- Letter (DOCX): {paths.letter_docx}",
+        ]
+    )
 
     return "\n".join(lines)
 
@@ -136,7 +196,9 @@ async def generate_assets_and_enqueue(
     This is the main entry point for the eager generation path.
     """
     paths = await generate_assets(
-        profile, opportunity, app_id,
+        profile,
+        opportunity,
+        app_id,
         _model_override=_model_override,
         asset_dir=asset_dir,
     )
@@ -187,17 +249,24 @@ async def generate_assets_batch(
         for attempt in range(3):
             try:
                 return await generate_assets_and_enqueue(
-                    conn, profile, opportunity, app_id,
+                    conn,
+                    profile,
+                    opportunity,
+                    app_id,
                     _model_override=_model_override,
                 )
             except Exception as exc:
-                if attempt < 2 and "onnect" in str(exc):
-                    logger.debug("Retry %d for %s: %s", attempt + 1, opportunity.company, exc)
+                if attempt < 2 and _is_transient(exc):
+                    logger.debug(
+                        "Retry %d for %s: %s", attempt + 1, opportunity.company, exc
+                    )
                     await asyncio.sleep(1 * (attempt + 1))
                     continue
                 logger.warning(
                     "Failed to generate assets for %s (%s): %s",
-                    opportunity.company, app_id, exc,
+                    opportunity.company,
+                    app_id,
+                    exc,
                 )
                 return None
         return None

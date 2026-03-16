@@ -25,6 +25,7 @@ from emplaiyed.core.models import (
 )
 from emplaiyed.generation.pipeline import (
     AssetPaths,
+    detect_language,
     generate_assets,
     generate_assets_and_enqueue,
     generate_assets_batch,
@@ -97,13 +98,82 @@ class TestHasAssets:
         assert has_assets("full-app") is True
 
 
+class TestDetectLanguage:
+    async def test_returns_string(self):
+        model = TestModel()
+        result = await detect_language("Some job description", _model_override=model)
+        assert isinstance(result, str)
+        assert result in ("English", "French")
+
+    async def test_language_passed_to_generators(
+        self,
+        profile,
+        opportunity,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Verify detect_language result flows into both generators."""
+        captured: dict[str, str | None] = {"cv_lang": None, "letter_lang": None}
+
+        async def fake_generate_cv(prof, opp, *, language, _model_override=None):
+            captured["cv_lang"] = language
+            from emplaiyed.generation.cv_generator import GeneratedCV, SkillCategory
+
+            return GeneratedCV(
+                name="X",
+                email="x@x.com",
+                professional_title="Dev",
+                summary="S",
+                skill_categories=[SkillCategory(category="A", skills=["B"])],
+                experience=[],
+                education=[],
+            )
+
+        async def fake_generate_letter(prof, opp, *, language, _model_override=None):
+            captured["letter_lang"] = language
+            from emplaiyed.generation.letter_generator import GeneratedLetter
+
+            return GeneratedLetter(
+                greeting="Hi",
+                hook="Hook",
+                proof="Proof",
+                close="Close",
+                closing="Bye",
+                signature_name="X",
+            )
+
+        monkeypatch.setattr(
+            "emplaiyed.generation.pipeline.generate_cv",
+            fake_generate_cv,
+        )
+        monkeypatch.setattr(
+            "emplaiyed.generation.pipeline.generate_letter",
+            fake_generate_letter,
+        )
+
+        model = TestModel()
+        await generate_assets(
+            profile,
+            opportunity,
+            "test-app",
+            _model_override=model,
+            asset_dir=tmp_path / "assets",
+        )
+
+        # Both generators received the same language string
+        assert captured["cv_lang"] is not None
+        assert captured["cv_lang"] == captured["letter_lang"]
+
+
 class TestGenerateAssets:
-    async def test_creates_all_four_files(self, profile, opportunity, tmp_path):
+    async def test_creates_all_six_files(self, profile, opportunity, tmp_path):
         model = TestModel()
         asset_dir = tmp_path / "assets" / "test-app"
 
         paths = await generate_assets(
-            profile, opportunity, "test-app",
+            profile,
+            opportunity,
+            "test-app",
             _model_override=model,
             asset_dir=asset_dir,
         )
@@ -111,15 +181,19 @@ class TestGenerateAssets:
         assert isinstance(paths, AssetPaths)
         assert paths.cv_md.exists()
         assert paths.cv_pdf.exists()
+        assert paths.cv_docx.exists()
         assert paths.letter_md.exists()
         assert paths.letter_pdf.exists()
+        assert paths.letter_docx.exists()
 
     async def test_cv_markdown_has_content(self, profile, opportunity, tmp_path):
         model = TestModel()
         asset_dir = tmp_path / "assets" / "test-app"
 
         paths = await generate_assets(
-            profile, opportunity, "test-app",
+            profile,
+            opportunity,
+            "test-app",
             _model_override=model,
             asset_dir=asset_dir,
         )
@@ -133,7 +207,9 @@ class TestGenerateAssets:
         asset_dir = tmp_path / "assets" / "test-app"
 
         paths = await generate_assets(
-            profile, opportunity, "test-app",
+            profile,
+            opportunity,
+            "test-app",
             _model_override=model,
             asset_dir=asset_dir,
         )
@@ -146,7 +222,9 @@ class TestGenerateAssets:
         asset_dir = tmp_path / "assets" / "test-app"
 
         paths = await generate_assets(
-            profile, opportunity, "test-app",
+            profile,
+            opportunity,
+            "test-app",
             _model_override=model,
             asset_dir=asset_dir,
         )
@@ -170,9 +248,13 @@ class TestGenerateAssetsAndEnqueue:
         save_application(db, app)
 
         paths = await generate_assets_and_enqueue(
-            db, profile, opportunity, "app-1",
+            db,
+            profile,
+            opportunity,
+            "app-1",
             _model_override=model,
-            asset_dir=db.execute("SELECT 1").fetchone() and Path("/tmp/test-assets-enqueue"),
+            asset_dir=db.execute("SELECT 1").fetchone()
+            and Path("/tmp/test-assets-enqueue"),
         )
 
         # Verify work item was created
@@ -184,7 +266,9 @@ class TestGenerateAssetsAndEnqueue:
         updated = get_application(db, "app-1")
         assert updated.status == ApplicationStatus.OUTREACH_PENDING
 
-    async def test_work_item_instructions_reference_assets(self, profile, opportunity, db, tmp_path):
+    async def test_work_item_instructions_reference_assets(
+        self, profile, opportunity, db, tmp_path
+    ):
         model = TestModel()
         save_opportunity(db, opportunity)
 
@@ -199,7 +283,10 @@ class TestGenerateAssetsAndEnqueue:
 
         asset_dir = tmp_path / "assets" / "app-1"
         await generate_assets_and_enqueue(
-            db, profile, opportunity, "app-1",
+            db,
+            profile,
+            opportunity,
+            "app-1",
             _model_override=model,
             asset_dir=asset_dir,
         )
@@ -207,7 +294,9 @@ class TestGenerateAssetsAndEnqueue:
         items = list_pending_work_items(db)
         instructions = items[0].instructions
         assert "cv.pdf" in instructions
+        assert "cv.docx" in instructions
         assert "letter.pdf" in instructions
+        assert "letter.docx" in instructions
         assert "jobbank.gc.ca/job/12345" in instructions
 
 
@@ -241,7 +330,9 @@ class TestGenerateAssetsBatch:
             scored_apps.append((f"app-{i}", opp))
 
         results = await generate_assets_batch(
-            db, profile, scored_apps,
+            db,
+            profile,
+            scored_apps,
             top_n=2,
             _model_override=model,
         )
@@ -277,7 +368,9 @@ class TestGenerateAssetsBatch:
             scored_apps.append((f"app-{i}", opp))
 
         results = await generate_assets_batch(
-            db, profile, scored_apps,
+            db,
+            profile,
+            scored_apps,
             top_n=3,
             _model_override=model,
         )
@@ -288,7 +381,9 @@ class TestGenerateAssetsBatch:
 
     async def test_empty_list_returns_empty(self, profile, db):
         results = await generate_assets_batch(
-            db, profile, [],
+            db,
+            profile,
+            [],
             _model_override=TestModel(),
         )
         assert results == []

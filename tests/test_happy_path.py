@@ -125,8 +125,11 @@ def opportunities() -> list[Opportunity]:
 class TestHappyPath:
     """Full pipeline: scan → score → outreach → followup → schedule → prep → negotiate → accept."""
 
-    async def test_full_pipeline(self, profile, db, opportunities):
+    async def test_full_pipeline(self, profile, db, opportunities, monkeypatch):
         model = TestModel()
+
+        # TestModel produces score=0; set threshold to 0 so all apps land in SCORED.
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 0)
 
         # ---- Step 1: Save opportunities (simulating scrape_and_persist) ----
         for opp in opportunities:
@@ -144,9 +147,7 @@ class TestHappyPath:
         # ---- Step 3: Outreach via work queue ----
         # Pick the top scored opportunity
         top = scored[0]
-        top_app = next(
-            a for a in apps if a.opportunity_id == top.opportunity.id
-        )
+        top_app = next(a for a in apps if a.opportunity_id == top.opportunity.id)
 
         draft = await draft_outreach(profile, top.opportunity, _model_override=model)
         assert draft.subject
@@ -180,7 +181,10 @@ class TestHappyPath:
 
         # Enqueue follow-up → assert FOLLOW_UP_PENDING
         fu_item = enqueue_followup(
-            db, top_app.id, top.opportunity, fu_draft,
+            db,
+            top_app.id,
+            top.opportunity,
+            fu_draft,
             target_status=ApplicationStatus.FOLLOW_UP_1,
             previous_status=ApplicationStatus.OUTREACH_SENT,
             followup_number=1,
@@ -275,7 +279,9 @@ class TestHappyPath:
 
         # Generate assets
         paths = await generate_assets(
-            profile, opportunities[0], "test-app",
+            profile,
+            opportunities[0],
+            "test-app",
             _model_override=model,
             asset_dir=tmp_path / "assets" / "test-app",
         )
@@ -293,9 +299,12 @@ class TestHappyPath:
         assert paths.cv_pdf.read_bytes()[:5] == b"%PDF-"
         assert paths.letter_pdf.read_bytes()[:5] == b"%PDF-"
 
-    async def test_passed_state(self, profile, db, opportunities):
+    async def test_passed_state(self, profile, db, opportunities, monkeypatch):
         """SCORED applications can be marked as PASSED (terminal)."""
         model = TestModel()
+
+        # TestModel produces score=0; set threshold to 0 so all land in SCORED.
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 0)
 
         for opp in opportunities:
             save_opportunity(db, opp)

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Queue - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Queue</h1>
+    <span class="badge badge-lg badge-warning">{{ applications|length }} pending</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Scored opportunities awaiting review. Mark as done (applied) or pass.
+  </p>
+
+  {% with show_score=true %}
+    {% include "partials/app_table.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

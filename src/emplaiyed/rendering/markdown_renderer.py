@@ -26,11 +26,19 @@ def render_cv_markdown(cv: GeneratedCV) -> str:
     lines.append(" | ".join(contact))
     lines.append("")
 
-    # Skills
-    if cv.skills:
+    # Summary
+    if cv.summary:
+        lines.append("## Summary")
+        lines.append("")
+        lines.append(cv.summary)
+        lines.append("")
+
+    # Skills (categorized)
+    if cv.skill_categories:
         lines.append("## Skills")
         lines.append("")
-        lines.append(", ".join(cv.skills))
+        for cat in cv.skill_categories:
+            lines.append(f"**{cat.category}:** {', '.join(cat.skills)}")
         lines.append("")
 
     # Experience
@@ -42,8 +50,8 @@ def render_cv_markdown(cv: GeneratedCV) -> str:
             if exp.start_date or exp.end_date:
                 start = exp.start_date or "?"
                 end = exp.end_date or "Present"
-                date_range = f" ({start} – {end})"
-            lines.append(f"### {exp.title} — {exp.company}{date_range}")
+                date_range = f" ({start} \u2013 {end})"
+            lines.append(f"### {exp.title} \u2014 {exp.company}{date_range}")
             lines.append("")
             if exp.description:
                 lines.append(exp.description)
@@ -53,20 +61,42 @@ def render_cv_markdown(cv: GeneratedCV) -> str:
             if exp.highlights:
                 lines.append("")
 
-    # Education
+    # Projects
+    if cv.projects:
+        lines.append("## Projects")
+        lines.append("")
+        for proj in cv.projects:
+            url_str = f" ({proj.url})" if proj.url else ""
+            lines.append(f"### {proj.name}{url_str}")
+            lines.append("")
+            lines.append(proj.description)
+            lines.append("")
+            if proj.technologies:
+                lines.append(f"Technologies: {', '.join(proj.technologies)}")
+                lines.append("")
+
+    # Education (structured)
     if cv.education:
         lines.append("## Education")
         lines.append("")
         for edu in cv.education:
-            lines.append(f"- {edu}")
+            date_range = ""
+            if edu.start_date or edu.end_date:
+                start = edu.start_date or "?"
+                end = edu.end_date or "Present"
+                date_range = f" ({start} \u2013 {end})"
+            lines.append(
+                f"- **{edu.degree} in {edu.field}**, {edu.institution}{date_range}"
+            )
         lines.append("")
 
-    # Certifications
+    # Certifications (structured)
     if cv.certifications:
         lines.append("## Certifications")
         lines.append("")
         for cert in cv.certifications:
-            lines.append(f"- {cert}")
+            date_str = f" ({cert.date})" if cert.date else ""
+            lines.append(f"- **{cert.name}** \u2014 {cert.issuer}{date_str}")
         lines.append("")
 
     # Languages
@@ -85,7 +115,11 @@ def render_letter_markdown(letter: GeneratedLetter) -> str:
     lines = [
         letter.greeting,
         "",
-        letter.body,
+        letter.hook,
+        "",
+        letter.proof,
+        "",
+        letter.close,
         "",
         letter.closing,
         "",

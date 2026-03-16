@@ -1,0 +1,40 @@
+{# Contact card partial — displays contact info with optional "Draft Follow-up" button.
+   Expects: contact (Contact | None), application_id (str | None) #}
+
+<div class="card card-compact bg-base-200 shadow-sm">
+  <div class="card-body">
+    {% if contact %}
+      <h3 class="card-title text-sm">
+        {{ contact.name or 'Unknown Contact' }}
+        {% if contact.title %}
+          <span class="badge badge-sm badge-ghost">{{ contact.title }}</span>
+        {% endif %}
+      </h3>
+      {% if contact.email %}
+        <p class="text-xs"><span class="font-mono">{{ contact.email }}</span></p>
+      {% endif %}
+      {% if contact.phone %}
+        <p class="text-xs">{{ contact.phone }}</p>
+      {% endif %}
+      <p class="text-xs opacity-50">
+        Source: {{ contact.source }} | Confidence: {{ (contact.confidence * 100)|int }}%
+      </p>
+    {% else %}
+      <p class="text-xs opacity-50">No contact found</p>
+    {% endif %}
+    {% if application_id %}
+      <div class="card-actions justify-end mt-2">
+        <button
+          class="btn btn-xs btn-primary"
+          hx-post="/api/contacts/draft-followup/{{ application_id }}"
+          hx-target="#followup-draft-{{ application_id }}"
+          hx-swap="innerHTML"
+          hx-indicator="this"
+        >
+          Draft Follow-up
+        </button>
+      </div>
+      <div id="followup-draft-{{ application_id }}" class="mt-2"></div>
+    {% endif %}
+  </div>
+</div>

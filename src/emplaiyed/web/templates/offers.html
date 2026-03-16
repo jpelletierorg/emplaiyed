@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Offers - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Offers</h1>
+    <span class="badge badge-lg badge-success">{{ applications|length }}</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Applications with offers received, under negotiation, or pending acceptance.
+  </p>
+
+  {% with show_score=false %}
+    {% include "partials/app_table.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

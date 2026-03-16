@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <h1 class="text-3xl font-bold mb-6">Dashboard</h1>
+
+  <!-- Summary cards -->
+  <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+    <div class="stat bg-base-100 rounded-box shadow">
+      <div class="stat-title">Total Applications</div>
+      <div class="stat-value text-primary">{{ total_apps }}</div>
+    </div>
+    <div class="stat bg-base-100 rounded-box shadow">
+      <div class="stat-title">Active</div>
+      <div class="stat-value text-info">{{ funnel.active }}</div>
+    </div>
+    <div class="stat bg-base-100 rounded-box shadow">
+      <div class="stat-title">Closed</div>
+      <div class="stat-value text-base-content/60">{{ funnel.closed }}</div>
+    </div>
+    <div class="stat bg-base-100 rounded-box shadow">
+      <div class="stat-title">In Queue</div>
+      <div class="stat-value text-warning">{{ queue_count }}</div>
+    </div>
+  </div>
+
+  <!-- Funnel stages -->
+  <div class="card bg-base-100 shadow mb-8">
+    <div class="card-body">
+      <h2 class="card-title mb-4">Pipeline Funnel</h2>
+      <div class="overflow-x-auto">
+        <table class="table table-zebra">
+          <thead>
+            <tr>
+              <th>Stage</th>
+              <th class="text-right">Count</th>
+              <th class="text-right">Conversion</th>
+              <th class="text-right">Avg Time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for stage in funnel.stages %}
+            <tr>
+              <td class="font-medium">{{ stage.name }}</td>
+              <td class="text-right">
+                <span class="badge badge-lg {% if stage.count > 0 %}badge-primary{% else %}badge-ghost{% endif %}">
+                  {{ stage.count }}
+                </span>
+              </td>
+              <td class="text-right">
+                {% if stage.conversion_pct is not none %}
+                  {{ "%.1f"|format(stage.conversion_pct) }}%
+                {% else %}
+                  <span class="text-base-content/30">-</span>
+                {% endif %}
+              </td>
+              <td class="text-right">
+                {% if stage.avg_time_in_stage %}
+                  {{ stage.avg_time_in_stage.days }}d {{ (stage.avg_time_in_stage.seconds // 3600) }}h
+                {% else %}
+                  <span class="text-base-content/30">-</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Closed breakdown -->
+  {% if funnel.closed_breakdown %}
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title mb-4">Closed Breakdown</h2>
+      <div class="flex flex-wrap gap-4">
+        {% for status, count in funnel.closed_breakdown.items() %}
+        <div class="stat bg-base-200 rounded-box px-6 py-4">
+          <div class="stat-title text-xs">{{ status }}</div>
+          <div class="stat-value text-lg
+            {% if status == 'ACCEPTED' %}text-success
+            {% elif status == 'REJECTED' %}text-error
+            {% elif status == 'GHOSTED' %}text-warning
+            {% elif status == 'PASSED' %}text-base-content/50
+            {% endif %}
+          ">{{ count }}</div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

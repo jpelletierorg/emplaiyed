@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block title %}Build Profile - Review - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Build Your Profile</h1>
+    <p class="text-base-content/60">Review what was extracted from your CV.</p>
+    <ul class="steps steps-horizontal w-full mt-6">
+      <li class="step step-primary">Upload CV</li>
+      <li class="step step-primary">Review</li>
+      <li class="step">Fill Gaps</li>
+      <li class="step">Done</li>
+    </ul>
+  </div>
+
+  <!-- Extraction summary -->
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h2 class="card-title mb-4">Extracted Profile</h2>
+
+      <div class="space-y-2 text-sm font-mono bg-base-200 p-4 rounded-lg">
+        <pre class="whitespace-pre-wrap">{{ summary }}</pre>
+      </div>
+    </div>
+  </div>
+
+  <!-- Correction form -->
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title mb-2">Anything wrong or outdated?</h2>
+      <p class="text-base-content/60 text-sm mb-4">
+        Describe any corrections in plain language (e.g. "My current title is Senior Developer, not Developer").
+        Leave empty if everything looks good.
+      </p>
+
+      <form action="/api/profile/build/correct" method="post">
+        <textarea name="corrections" rows="4"
+                  placeholder="e.g. I left Company X in 2024, my title was actually Senior Developer..."
+                  class="textarea textarea-bordered w-full mb-4"></textarea>
+
+        <div class="card-actions justify-end">
+          <a href="/profile/build" class="btn btn-ghost">Start Over</a>
+          <button type="submit" class="btn btn-primary">
+            Continue
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

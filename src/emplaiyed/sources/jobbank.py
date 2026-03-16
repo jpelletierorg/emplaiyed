@@ -268,6 +268,27 @@ def parse_search_results(html: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+def _parse_how_to_apply(soup: BeautifulSoup) -> dict:
+    """Extract contact info from the 'How to apply' section if present."""
+    how_to = None
+    for heading in soup.find_all(["h2", "h3", "h4"]):
+        if "how to apply" in heading.get_text(strip=True).lower():
+            how_to = heading
+            break
+    if not how_to:
+        return {}
+
+    # Get text between this heading and next heading
+    parts: list[str] = []
+    for sib in how_to.find_next_siblings():
+        if sib.name in ("h2", "h3", "h4"):
+            break
+        parts.append(sib.get_text(strip=True))
+
+    text = " ".join(parts)
+    return {"how_to_apply_text": text} if text.strip() else {}
+
+
 def parse_job_posting(html: str) -> dict:
     """Parse an individual job posting page for the full description.
 
@@ -314,7 +335,22 @@ def parse_job_posting(html: str) -> dict:
     for li in soup.find_all("li"):
         text = li.get_text(separator=" ", strip=True)
         if "," in text and any(
-            prov in text for prov in ["QC", "ON", "BC", "AB", "MB", "SK", "NB", "NS", "NL", "PE", "NT", "NU", "YT"]
+            prov in text
+            for prov in [
+                "QC",
+                "ON",
+                "BC",
+                "AB",
+                "MB",
+                "SK",
+                "NB",
+                "NS",
+                "NL",
+                "PE",
+                "NT",
+                "NU",
+                "YT",
+            ]
         ):
             location = re.sub(r"^Location:?\s*", "", text).strip()
             location = re.sub(r"\s+", " ", location)
@@ -328,12 +364,16 @@ def parse_job_posting(html: str) -> dict:
             salary_text = text
             break
 
+    # Extract "How to apply" section for contact extraction
+    how_to_apply = _parse_how_to_apply(soup)
+
     return {
         "title": title,
         "company": company,
         "location": location,
         "salary_text": salary_text,
         "description": description,
+        "how_to_apply": how_to_apply,
     }
 
 
@@ -362,7 +402,9 @@ class JobBankSource(BaseSource):
             return []
 
         search_url = _build_search_url(query)
-        logger.debug("Starting scrape: keywords=%s, location=%s", query.keywords, query.location)
+        logger.debug(
+            "Starting scrape: keywords=%s, location=%s", query.keywords, query.location
+        )
 
         async with httpx.AsyncClient(
             follow_redirects=True,
@@ -389,13 +431,21 @@ class JobBankSource(BaseSource):
             opportunities: list[Opportunity] = []
             for listing in listings:
                 try:
-                    logger.debug("Fetching posting %s: %s", listing["job_id"], listing["url"])
+                    logger.debug(
+                        "Fetching posting %s: %s", listing["job_id"], listing["url"]
+                    )
                     posting_resp = await client.get(listing["url"])
                     posting_resp.raise_for_status()
                     posting_data = parse_job_posting(posting_resp.text)
                 except httpx.HTTPError:
                     # If we can't fetch the detail page, use what we have
-                    posting_data = {"description": "", "title": "", "company": "", "location": "", "salary_text": ""}
+                    posting_data = {
+                        "description": "",
+                        "title": "",
+                        "company": "",
+                        "location": "",
+                        "salary_text": "",
+                    }
 
                 # Merge: prefer detail page data where available, fall back
                 # to search listing data
@@ -406,7 +456,11 @@ class JobBankSource(BaseSource):
                 description = posting_data["description"] or f"{title} at {company}"
 
                 salary_min, salary_max = _parse_salary(salary_text)
-                posted = _parse_date(listing["posted_date"]).date() if _parse_date(listing["posted_date"]) else None
+                posted = (
+                    _parse_date(listing["posted_date"]).date()
+                    if _parse_date(listing["posted_date"])
+                    else None
+                )
 
                 opp = Opportunity(
                     source="jobbank",
@@ -422,6 +476,7 @@ class JobBankSource(BaseSource):
                     raw_data={
                         "job_id": listing["job_id"],
                         "salary_text": salary_text,
+                        "how_to_apply": posting_data.get("how_to_apply", {}),
                     },
                 )
                 opportunities.append(opp)

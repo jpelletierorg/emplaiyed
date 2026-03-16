@@ -46,8 +46,7 @@ def profile_show() -> None:
     console.print(
         Panel(
             f"[bold]{profile.name}[/bold]\n"
-            f"{profile.email}"
-            + (f"  |  {profile.phone}" if profile.phone else ""),
+            f"{profile.email}" + (f"  |  {profile.phone}" if profile.phone else ""),
             title="Profile",
             border_style="blue",
         )
@@ -128,9 +127,7 @@ def profile_show() -> None:
         if asp.target_roles:
             lines.append(f"[bold]Target Roles:[/bold] {', '.join(asp.target_roles)}")
         if asp.target_industries:
-            lines.append(
-                f"[bold]Industries:[/bold] {', '.join(asp.target_industries)}"
-            )
+            lines.append(f"[bold]Industries:[/bold] {', '.join(asp.target_industries)}")
         if asp.salary_minimum or asp.salary_target:
             sal_parts: list[str] = []
             if asp.salary_minimum:
@@ -164,6 +161,7 @@ def profile_path() -> None:
 # profile build
 # ---------------------------------------------------------------------------
 
+
 def _rich_prompt(message: str) -> str:
     """Prompt the user using rich's console and return their input."""
     return console.input(f"[bold cyan]{message}[/bold cyan]\n> ")
@@ -188,4 +186,160 @@ def profile_build() -> None:
         )
     except KeyboardInterrupt:
         console.print("\n[yellow]Profile build cancelled.[/yellow]")
+        raise typer.Exit(code=0)
+
+
+@profile_app.command("advisor")
+def profile_advisor() -> None:
+    """Analyze your profile against market demand and get improvement recommendations."""
+    from emplaiyed.core.database import get_default_db_path, init_db
+    from emplaiyed.profile.market_advisor import analyze_market_gaps
+
+    path = get_default_profile_path()
+    if not path.exists():
+        console.print(
+            Panel(
+                f"No profile found at [bold]{path}[/bold].\n\n"
+                "Run [bold green]emplaiyed profile build[/bold green] first.",
+                title="No Profile",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=0)
+
+    profile = load_profile(path)
+    db_path = get_default_db_path()
+    if not db_path.exists():
+        console.print(
+            Panel(
+                "No database found. Run a search first:\n"
+                "[bold green]emplaiyed sources search[/bold green]",
+                title="No Data",
+                border_style="yellow",
+            )
+        )
+        raise typer.Exit(code=0)
+
+    conn = init_db(db_path)
+
+    console.print(
+        "\n[bold cyan]Analyzing your profile against market demand...[/bold cyan]\n"
+    )
+
+    try:
+        report = asyncio.run(analyze_market_gaps(profile, conn))
+    finally:
+        conn.close()
+
+    # --- Display report ---
+
+    # Summary
+    console.print(
+        Panel(report.summary, title="Market Gap Analysis", border_style="blue")
+    )
+
+    # Strengths
+    if report.strengths:
+        strength_text = "\n".join(
+            f"  [green]\u2713[/green] {s}" for s in report.strengths
+        )
+        console.print(
+            Panel(strength_text, title="Your Strengths", border_style="green")
+        )
+
+    # Skill gaps
+    if report.skill_gaps:
+        gap_table = Table(title="Skill Gaps")
+        gap_table.add_column("Priority", style="bold")
+        gap_table.add_column("Skill", style="cyan")
+        gap_table.add_column("Market Signal")
+        gap_table.add_column("Recommendation")
+        for g in sorted(
+            report.skill_gaps,
+            key=lambda x: {"high": 0, "medium": 1, "low": 2}.get(x.priority, 3),
+        ):
+            priority_style = {"high": "red", "medium": "yellow", "low": "dim"}.get(
+                g.priority, ""
+            )
+            gap_table.add_row(
+                f"[{priority_style}]{g.priority.upper()}[/{priority_style}]",
+                g.skill,
+                g.demand_signal,
+                g.recommendation,
+            )
+        console.print(gap_table)
+
+    # Experience gaps
+    if report.experience_gaps:
+        exp_table = Table(title="Experience Gaps")
+        exp_table.add_column("Area", style="cyan")
+        exp_table.add_column("Market Expects")
+        exp_table.add_column("You Have")
+        exp_table.add_column("Action")
+        for eg in report.experience_gaps:
+            exp_table.add_row(
+                eg.area, eg.market_expectation, eg.candidate_status, eg.recommendation
+            )
+        console.print(exp_table)
+
+    # Project suggestions
+    if report.project_suggestions:
+        console.print("\n[bold]Suggested Projects to Build[/bold]")
+        for proj in report.project_suggestions:
+            console.print(
+                Panel(
+                    f"[bold]{proj.name}[/bold]\n"
+                    f"{proj.description}\n"
+                    f"[dim]Skills: {', '.join(proj.skills_demonstrated)} | "
+                    f"Effort: {proj.estimated_effort}[/dim]",
+                    border_style="cyan",
+                )
+            )
+
+    # Certification suggestions
+    if report.certification_suggestions:
+        cert_table = Table(title="Certifications Worth Pursuing")
+        cert_table.add_column("Certification", style="cyan")
+        cert_table.add_column("Issuer")
+        cert_table.add_column("Relevance")
+        for c in report.certification_suggestions:
+            cert_table.add_row(c.name, c.issuer, c.relevance)
+        console.print(cert_table)
+
+    # Profile wording improvements
+    if report.profile_wording:
+        console.print("\n[bold]Profile Wording Improvements[/bold]")
+        for pw in report.profile_wording:
+            console.print(
+                Panel(
+                    f"[red]Current:[/red] {pw.current}\n"
+                    f"[green]Suggested:[/green] {pw.suggested}\n"
+                    f"[dim]Reason: {pw.reason}[/dim]",
+                    border_style="yellow",
+                )
+            )
+
+    console.print(
+        "\n[dim]Run [bold]emplaiyed profile enhance[/bold] to improve "
+        "your highlights, or [bold]emplaiyed profile build[/bold] "
+        "to add missing information.[/dim]\n"
+    )
+
+
+@profile_app.command("enhance")
+def profile_enhance() -> None:
+    """Enrich duty-focused highlights with quantified achievements."""
+    from emplaiyed.profile.enricher import enrich_profile
+
+    try:
+        asyncio.run(
+            enrich_profile(
+                prompt_fn=_rich_prompt,
+                print_fn=_rich_print,
+            )
+        )
+    except FileNotFoundError:
+        raise typer.Exit(code=1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Profile enhancement cancelled.[/yellow]")
         raise typer.Exit(code=0)

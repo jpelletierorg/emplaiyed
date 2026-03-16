@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+
+{% block title %}Edit Profile - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Edit Profile</h1>
+    <a href="/profile" class="btn btn-ghost btn-sm">Cancel</a>
+  </div>
+
+  <form action="/api/profile/save" method="post">
+    <!-- Basic Info -->
+    <div class="card bg-base-100 shadow mb-6">
+      <div class="card-body">
+        <h2 class="card-title text-lg mb-3">Basic Information</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Full Name *</span></label>
+            <input type="text" name="name" value="{{ profile.name }}" required class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Email *</span></label>
+            <input type="email" name="email" value="{{ profile.email }}" required class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Phone</span></label>
+            <input type="text" name="phone" value="{{ profile.phone or '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">LinkedIn</span></label>
+            <input type="url" name="linkedin" value="{{ profile.linkedin or '' }}" class="input input-bordered" placeholder="https://linkedin.com/in/..." />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">GitHub</span></label>
+            <input type="url" name="github" value="{{ profile.github or '' }}" class="input input-bordered" placeholder="https://github.com/..." />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Address -->
+    <div class="card bg-base-100 shadow mb-6">
+      <div class="card-body">
+        <h2 class="card-title text-lg mb-3">Location</h2>
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="form-control">
+            <label class="label"><span class="label-text">City</span></label>
+            <input type="text" name="address_city" value="{{ profile.address.city or '' if profile.address else '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Province/State</span></label>
+            <input type="text" name="address_province" value="{{ profile.address.province_state or '' if profile.address else '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Country</span></label>
+            <input type="text" name="address_country" value="{{ profile.address.country or '' if profile.address else '' }}" class="input input-bordered" />
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Skills -->
+    <div class="card bg-base-100 shadow mb-6">
+      <div class="card-body">
+        <h2 class="card-title text-lg mb-3">Skills</h2>
+        <div class="form-control">
+          <label class="label"><span class="label-text">Comma-separated list</span></label>
+          <input type="text" name="skills" value="{{ profile.skills | join(', ') }}" class="input input-bordered" placeholder="Python, AWS, Docker, ..." />
+        </div>
+      </div>
+    </div>
+
+    <!-- Aspirations -->
+    <div class="card bg-base-100 shadow mb-6">
+      <div class="card-body">
+        <h2 class="card-title text-lg mb-3">Aspirations</h2>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Target Roles (comma-separated)</span></label>
+            <input type="text" name="target_roles" value="{{ profile.aspirations.target_roles | join(', ') if profile.aspirations else '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Work Arrangement (comma-separated)</span></label>
+            <input type="text" name="work_arrangement" value="{{ profile.aspirations.work_arrangement | join(', ') if profile.aspirations else '' }}" class="input input-bordered" placeholder="remote, hybrid" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Geographic Preferences (comma-separated)</span></label>
+            <input type="text" name="geographic_preferences" value="{{ profile.aspirations.geographic_preferences | join(', ') if profile.aspirations else '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Urgency</span></label>
+            <input type="text" name="urgency" value="{{ profile.aspirations.urgency or '' if profile.aspirations else '' }}" class="input input-bordered" placeholder="e.g. actively looking, passive, urgent" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Minimum Salary ($)</span></label>
+            <input type="number" name="salary_minimum" value="{{ profile.aspirations.salary_minimum or '' if profile.aspirations else '' }}" class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Target Salary ($)</span></label>
+            <input type="number" name="salary_target" value="{{ profile.aspirations.salary_target or '' if profile.aspirations else '' }}" class="input input-bordered" />
+          </div>
+        </div>
+        <div class="form-control mt-4">
+          <label class="label"><span class="label-text">Career Statement</span></label>
+          <textarea name="statement" rows="3" class="textarea textarea-bordered" placeholder="A 1-2 sentence description of your career goals...">{{ profile.aspirations.statement or '' if profile.aspirations else '' }}</textarea>
+        </div>
+      </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="flex justify-end gap-3">
+      <a href="/profile" class="btn btn-ghost">Cancel</a>
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

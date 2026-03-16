@@ -6,8 +6,14 @@ import typer
 
 from emplaiyed.cli.console_cmd import console_command
 from emplaiyed.cli.followup_cmd import followup_command
+from emplaiyed.cli.inbox_cmd import inbox_app
+from emplaiyed.cli.serve_cmd import serve_command
 from emplaiyed.cli.funnel_cmd import funnel_app
-from emplaiyed.cli.negotiate_cmd import accept_command, negotiate_command, offers_command
+from emplaiyed.cli.negotiate_cmd import (
+    accept_command,
+    negotiate_command,
+    offers_command,
+)
 from emplaiyed.cli.outreach_cmd import outreach_command
 from emplaiyed.cli.prep_cmd import prep_command
 from emplaiyed.cli.profile_cmd import profile_app
@@ -27,6 +33,7 @@ app.add_typer(profile_app, name="profile")
 app.add_typer(funnel_app, name="funnel")
 app.add_typer(sources_app, name="sources")
 app.add_typer(work_app, name="work")
+app.add_typer(inbox_app, name="inbox")
 
 app.command("schedule")(schedule_command)
 app.command("calendar")(calendar_command)
@@ -38,6 +45,7 @@ app.command("accept")(accept_command)
 app.command("offers")(offers_command)
 app.command("reset")(reset_command)
 app.command("console")(console_command)
+app.command("serve")(serve_command)
 
 
 def version_callback(value: bool):
@@ -49,16 +57,24 @@ def version_callback(value: bool):
 @app.callback()
 def main(
     version: Optional[bool] = typer.Option(
-        None, "--version", "-v", callback=version_callback, is_eager=True,
+        None,
+        "--version",
+        "-v",
+        callback=version_callback,
+        is_eager=True,
         help="Show version and exit.",
     ),
     debug: bool = typer.Option(
-        False, "--debug", help="Enable debug logging.",
+        False,
+        "--debug",
+        help="Enable debug logging.",
     ),
 ):
     """AI-powered job seeking toolkit."""
     level = logging.DEBUG if debug else logging.WARNING
-    logging.basicConfig(level=logging.WARNING, format="%(name)s %(levelname)s: %(message)s")
+    logging.basicConfig(
+        level=logging.WARNING, format="%(name)s %(levelname)s: %(message)s"
+    )
     logging.getLogger("emplaiyed").setLevel(level)
 
 

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import BaseModel
+from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models.test import TestModel
 
 from emplaiyed.llm.config import get_api_key
@@ -180,3 +183,77 @@ class TestModelOverride:
 
         m = _build_model("google/gemini-2.0-flash-001")
         assert m is not None
+
+
+class TestRetryOnConnectionError:
+    """Tests for connection-error retry logic in complete() / complete_structured()."""
+
+    async def test_complete_retries_on_connection_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """complete() retries on transient connection errors and succeeds."""
+        import emplaiyed.llm.engine as engine_mod
+        monkeypatch.setattr(engine_mod, "_RETRY_BACKOFF", 0.0)
+
+        mock_result = MagicMock()
+        mock_result.output = "recovered"
+
+        with patch.object(Agent, "run", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = [
+                ModelAPIError("test-model", "Connection error"),
+                mock_result,
+            ]
+            result = await complete("test", _model_override=TestModel())
+
+        assert result == "recovered"
+        assert mock_run.call_count == 2
+
+    async def test_complete_structured_retries_on_connection_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """complete_structured() retries on transient connection errors."""
+        import emplaiyed.llm.engine as engine_mod
+        monkeypatch.setattr(engine_mod, "_RETRY_BACKOFF", 0.0)
+
+        mock_result = MagicMock()
+        mock_result.output = CapitalCity(city="Paris", country="France")
+
+        with patch.object(Agent, "run", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = [
+                ModelAPIError("test-model", "Connection error"),
+                mock_result,
+            ]
+            result = await complete_structured(
+                "test", output_type=CapitalCity, _model_override=TestModel()
+            )
+
+        assert result.city == "Paris"
+        assert mock_run.call_count == 2
+
+    async def test_raises_after_max_retries(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """After exhausting retries, the error propagates."""
+        import emplaiyed.llm.engine as engine_mod
+        monkeypatch.setattr(engine_mod, "_RETRY_BACKOFF", 0.0)
+
+        with patch.object(Agent, "run", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = ModelAPIError("test-model", "Connection error")
+            with pytest.raises(ModelAPIError, match="Connection error"):
+                await complete("test", _model_override=TestModel())
+
+        assert mock_run.call_count == 3  # 1 initial + 2 retries
+
+    async def test_non_connection_error_not_retried(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Non-connection ModelAPIErrors are raised immediately without retry."""
+        import emplaiyed.llm.engine as engine_mod
+        monkeypatch.setattr(engine_mod, "_RETRY_BACKOFF", 0.0)
+
+        with patch.object(Agent, "run", new_callable=AsyncMock) as mock_run:
+            mock_run.side_effect = ModelAPIError("test-model", "Rate limit exceeded")
+            with pytest.raises(ModelAPIError, match="Rate limit"):
+                await complete("test", _model_override=TestModel())
+
+        assert mock_run.call_count == 1  # No retry

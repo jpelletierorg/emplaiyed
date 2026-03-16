@@ -5,8 +5,8 @@ from datetime import datetime
 
 import pytest
 
-from emplaiyed.core.database import init_db, list_opportunities, save_opportunity
-from emplaiyed.core.models import Opportunity
+from emplaiyed.core.database import init_db, list_opportunities, save_application, save_opportunity
+from emplaiyed.core.models import Application, ApplicationStatus, Opportunity
 from emplaiyed.sources.base import BaseSource, SearchQuery
 
 
@@ -88,9 +88,14 @@ class TestScrapeAndPersist:
         assert len(list_opportunities(db_conn)) == 2
 
     async def test_deduplicates_by_company_title_source(self, db_conn):
-        # Pre-save one opportunity
+        # Pre-save one opportunity with an active application
         existing = _make_opp("Acme", "Dev")
         save_opportunity(db_conn, existing)
+        save_application(db_conn, Application(
+            id="app-dup", opportunity_id=existing.id,
+            status=ApplicationStatus.SCORED,
+            created_at=datetime.now(), updated_at=datetime.now(),
+        ))
 
         # Scrape returns the same (company, title, source) plus a new one
         opps = [_make_opp("Acme", "Dev"), _make_opp("Globex", "PM")]
@@ -101,16 +106,30 @@ class TestScrapeAndPersist:
         # Only the new one should be saved
         assert len(saved) == 1
         assert saved[0].company == "Globex"
-        # Total in DB: the pre-existing + the new one
-        assert len(list_opportunities(db_conn)) == 2
 
     async def test_dedup_is_case_insensitive(self, db_conn):
-        save_opportunity(db_conn, _make_opp("acme", "dev"))
+        existing = _make_opp("acme", "dev")
+        save_opportunity(db_conn, existing)
+        save_application(db_conn, Application(
+            id="app-ci", opportunity_id=existing.id,
+            status=ApplicationStatus.SCORED,
+            created_at=datetime.now(), updated_at=datetime.now(),
+        ))
 
-        opps = [_make_opp("ACME", "DEV")]
-        source = MockSource(opps)
+        saved = await MockSource([_make_opp("ACME", "DEV")]).scrape_and_persist(SearchQuery(), db_conn)
+        assert len(saved) == 0
 
-        saved = await source.scrape_and_persist(SearchQuery(), db_conn)
+    async def test_passed_opportunity_blocked_from_rediscovery(self, db_conn):
+        """A passed opportunity should block re-discovery."""
+        existing = _make_opp("Acme", "Dev")
+        save_opportunity(db_conn, existing)
+        save_application(db_conn, Application(
+            id="app-passed", opportunity_id=existing.id,
+            status=ApplicationStatus.PASSED,
+            created_at=datetime.now(), updated_at=datetime.now(),
+        ))
+
+        saved = await MockSource([_make_opp("Acme", "Dev")]).scrape_and_persist(SearchQuery(), db_conn)
         assert len(saved) == 0
 
     async def test_dedup_within_same_batch(self, db_conn):

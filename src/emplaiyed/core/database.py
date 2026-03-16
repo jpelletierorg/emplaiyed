@@ -9,12 +9,14 @@ from typing import Any
 from emplaiyed.core.models import (
     Application,
     ApplicationStatus,
+    Contact,
     Interaction,
     InteractionType,
     Offer,
     OfferStatus,
     Opportunity,
     ScheduledEvent,
+    StatusTransition,
     WorkItem,
     WorkStatus,
     WorkType,
@@ -106,6 +108,52 @@ _MIGRATIONS = [
     "ALTER TABLE applications ADD COLUMN justification TEXT",
     "ALTER TABLE applications ADD COLUMN day_to_day TEXT",
     "ALTER TABLE applications ADD COLUMN why_it_fits TEXT",
+    "ALTER TABLE opportunities ADD COLUMN short_id TEXT",
+]
+
+_POST_MIGRATIONS = [
+    """
+    CREATE TABLE IF NOT EXISTS status_history (
+        id                TEXT PRIMARY KEY,
+        application_id    TEXT NOT NULL,
+        from_status       TEXT NOT NULL,
+        to_status         TEXT NOT NULL,
+        transitioned_at   TEXT NOT NULL,
+        FOREIGN KEY (application_id) REFERENCES applications(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS contacts (
+        id              TEXT PRIMARY KEY,
+        opportunity_id  TEXT NOT NULL,
+        name            TEXT,
+        email           TEXT,
+        phone           TEXT,
+        title           TEXT,
+        source          TEXT NOT NULL DEFAULT 'llm',
+        confidence      REAL NOT NULL DEFAULT 0.0,
+        created_at      TEXT NOT NULL,
+        FOREIGN KEY (opportunity_id) REFERENCES opportunities(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS processed_emails (
+        id              TEXT PRIMARY KEY,
+        message_id      TEXT NOT NULL UNIQUE,
+        from_address    TEXT,
+        subject         TEXT,
+        received_at     TEXT,
+        category        TEXT,
+        matched_app_id  TEXT,
+        summary         TEXT,
+        processed_at    TEXT NOT NULL
+    )
+    """,
+    # Full-text search index on opportunities for quick keyword lookup.
+    """
+    CREATE VIRTUAL TABLE IF NOT EXISTS opportunities_fts
+    USING fts5(opp_id UNINDEXED, company, title, description, location)
+    """,
 ]
 
 # ---------------------------------------------------------------------------
@@ -155,6 +203,11 @@ def init_db(path: Path) -> sqlite3.Connection:
             conn.execute(stmt)
         except sqlite3.OperationalError:
             pass  # column already exists
+    for stmt in _POST_MIGRATIONS:
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # table already exists or DB is locked by another process
     conn.commit()
     return conn
 
@@ -175,12 +228,13 @@ def save_opportunity(conn: sqlite3.Connection, opportunity: Opportunity) -> None
     conn.execute(
         """
         INSERT OR REPLACE INTO opportunities
-            (id, source, source_url, company, title, description,
+            (id, short_id, source, source_url, company, title, description,
              location, salary_min, salary_max, posted_date, scraped_at, raw_data)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             opportunity.id,
+            opportunity.short_id,
             opportunity.source,
             opportunity.source_url,
             opportunity.company,
@@ -194,12 +248,33 @@ def save_opportunity(conn: sqlite3.Connection, opportunity: Opportunity) -> None
             _json_dumps(opportunity.raw_data),
         ),
     )
+    # Keep FTS index in sync — delete stale row (if any) then insert fresh.
+    conn.execute("DELETE FROM opportunities_fts WHERE opp_id = ?", (opportunity.id,))
+    conn.execute(
+        """
+        INSERT INTO opportunities_fts (opp_id, company, title, description, location)
+        VALUES (?, ?, ?, COALESCE(?, ''), COALESCE(?, ''))
+        """,
+        (
+            opportunity.id,
+            opportunity.company,
+            opportunity.title,
+            opportunity.description,
+            opportunity.location,
+        ),
+    )
     conn.commit()
 
 
 def _row_to_opportunity(row: sqlite3.Row) -> Opportunity:
+    # short_id may be NULL for opportunities created before the migration.
+    # In that case, generate one and let it persist on next save.
+    from emplaiyed.core.models import _generate_short_id
+
+    short_id = row["short_id"] if "short_id" in row.keys() else None
     return Opportunity(
         id=row["id"],
+        short_id=short_id or _generate_short_id(),
         source=row["source"],
         source_url=row["source_url"],
         company=row["company"],
@@ -220,6 +295,15 @@ def get_opportunity(conn: sqlite3.Connection, id: str) -> Opportunity | None:
     return _row_to_opportunity(row) if row else None
 
 
+def get_opportunity_by_short_id(
+    conn: sqlite3.Connection, short_id: str
+) -> Opportunity | None:
+    """Look up an opportunity by its 6-character short_id."""
+    cur = conn.execute("SELECT * FROM opportunities WHERE short_id = ?", (short_id,))
+    row = cur.fetchone()
+    return _row_to_opportunity(row) if row else None
+
+
 def list_opportunities(conn: sqlite3.Connection, **filters: Any) -> list[Opportunity]:
     query = "SELECT * FROM opportunities"
     params: list[Any] = []
@@ -235,6 +319,23 @@ def list_opportunities(conn: sqlite3.Connection, **filters: Any) -> list[Opportu
     query += " ORDER BY scraped_at DESC"
     cur = conn.execute(query, params)
     return [_row_to_opportunity(row) for row in cur.fetchall()]
+
+
+def active_opportunity_keys(conn: sqlite3.Connection) -> set[tuple[str, str, str]]:
+    """Return (company, title, source) keys for opportunities that already have applications.
+
+    Any opportunity with an existing application — regardless of status — is
+    excluded from re-discovery.  Once you've seen it (scored, passed, rejected,
+    ghosted, etc.) it should not reappear as new.
+    """
+    cur = conn.execute(
+        """
+        SELECT DISTINCT lower(o.company), lower(o.title), lower(o.source)
+        FROM opportunities o
+        JOIN applications a ON a.opportunity_id = o.id
+        """
+    )
+    return {(row[0], row[1], row[2]) for row in cur.fetchall()}
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +405,44 @@ def list_applications(conn: sqlite3.Connection, **filters: Any) -> list[Applicat
     query += " ORDER BY updated_at DESC"
     cur = conn.execute(query, params)
     return [_row_to_application(row) for row in cur.fetchall()]
+
+
+def delete_application(conn: sqlite3.Connection, application_id: str) -> None:
+    """Delete an application and all related data (cascading).
+
+    Removes: interactions, offers, scheduled_events, work_items,
+    status_history, and the application itself.  Also deletes the
+    opportunity if no other applications reference it.
+    """
+    conn.execute("DELETE FROM interactions WHERE application_id = ?", (application_id,))
+    conn.execute("DELETE FROM offers WHERE application_id = ?", (application_id,))
+    conn.execute(
+        "DELETE FROM scheduled_events WHERE application_id = ?", (application_id,)
+    )
+    conn.execute("DELETE FROM work_items WHERE application_id = ?", (application_id,))
+    conn.execute(
+        "DELETE FROM status_history WHERE application_id = ?", (application_id,)
+    )
+
+    # Find the opportunity before deleting the application
+    cur = conn.execute(
+        "SELECT opportunity_id FROM applications WHERE id = ?", (application_id,)
+    )
+    row = cur.fetchone()
+    opp_id = row["opportunity_id"] if row else None
+
+    conn.execute("DELETE FROM applications WHERE id = ?", (application_id,))
+
+    # Delete orphaned opportunity (no other applications reference it)
+    if opp_id:
+        cur = conn.execute(
+            "SELECT COUNT(*) as cnt FROM applications WHERE opportunity_id = ?",
+            (opp_id,),
+        )
+        if cur.fetchone()["cnt"] == 0:
+            conn.execute("DELETE FROM opportunities WHERE id = ?", (opp_id,))
+
+    conn.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -585,3 +724,335 @@ def list_work_items(conn: sqlite3.Connection, **filters: Any) -> list[WorkItem]:
 def list_pending_work_items(conn: sqlite3.Connection) -> list[WorkItem]:
     """Return all PENDING work items, oldest first."""
     return list_work_items(conn, status=WorkStatus.PENDING)
+
+
+# ---------------------------------------------------------------------------
+# Status History CRUD
+# ---------------------------------------------------------------------------
+
+
+def save_status_transition(conn: sqlite3.Connection, t: StatusTransition) -> None:
+    conn.execute(
+        """
+        INSERT INTO status_history
+            (id, application_id, from_status, to_status, transitioned_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            t.id,
+            t.application_id,
+            t.from_status,
+            t.to_status,
+            _datetime_to_str(t.transitioned_at),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_status_transition(row: sqlite3.Row) -> StatusTransition:
+    return StatusTransition(
+        id=row["id"],
+        application_id=row["application_id"],
+        from_status=row["from_status"],
+        to_status=row["to_status"],
+        transitioned_at=_str_to_datetime(row["transitioned_at"]),  # type: ignore[arg-type]
+    )
+
+
+def list_status_transitions(
+    conn: sqlite3.Connection, application_id: str
+) -> list[StatusTransition]:
+    """Return all status transitions for an application, oldest first."""
+    cur = conn.execute(
+        "SELECT * FROM status_history WHERE application_id = ? ORDER BY transitioned_at ASC",
+        (application_id,),
+    )
+    return [_row_to_status_transition(row) for row in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Multi-status application query
+# ---------------------------------------------------------------------------
+
+
+def list_applications_by_statuses(
+    conn: sqlite3.Connection, statuses: list[ApplicationStatus]
+) -> list[Application]:
+    """Return applications whose status is in the given list, ordered by updated_at DESC."""
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    query = f"SELECT * FROM applications WHERE status IN ({placeholders}) ORDER BY updated_at DESC"
+    params = [s.value for s in statuses]
+    cur = conn.execute(query, params)
+    return [_row_to_application(row) for row in cur.fetchall()]
+
+
+def reclassify_threshold_apps(conn: sqlite3.Connection, threshold: int) -> int:
+    """Re-classify SCORED / BELOW_THRESHOLD apps based on *threshold*.
+
+    * SCORED apps with ``score < threshold`` → BELOW_THRESHOLD
+    * BELOW_THRESHOLD apps with ``score >= threshold`` → SCORED
+
+    Returns the total number of applications whose status changed.
+    """
+    now = _datetime_to_str(datetime.now())
+
+    # Demote: SCORED → BELOW_THRESHOLD
+    cur = conn.execute(
+        """
+        UPDATE applications
+           SET status = ?, updated_at = ?
+         WHERE status = ? AND score IS NOT NULL AND score < ?
+        """,
+        (
+            ApplicationStatus.BELOW_THRESHOLD.value,
+            now,
+            ApplicationStatus.SCORED.value,
+            threshold,
+        ),
+    )
+    demoted = cur.rowcount
+
+    # Promote: BELOW_THRESHOLD → SCORED
+    cur = conn.execute(
+        """
+        UPDATE applications
+           SET status = ?, updated_at = ?
+         WHERE status = ? AND (score IS NULL OR score >= ?)
+        """,
+        (
+            ApplicationStatus.SCORED.value,
+            now,
+            ApplicationStatus.BELOW_THRESHOLD.value,
+            threshold,
+        ),
+    )
+    promoted = cur.rowcount
+
+    if demoted or promoted:
+        conn.commit()
+
+    return demoted + promoted
+
+
+# ---------------------------------------------------------------------------
+# Contact CRUD
+# ---------------------------------------------------------------------------
+
+
+def save_contact(conn: sqlite3.Connection, contact: Contact) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO contacts
+            (id, opportunity_id, name, email, phone, title, source, confidence, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            contact.id,
+            contact.opportunity_id,
+            contact.name,
+            contact.email,
+            contact.phone,
+            contact.title,
+            contact.source,
+            contact.confidence,
+            contact.created_at.isoformat(),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_contact(row: sqlite3.Row) -> Contact:
+    return Contact(
+        id=row["id"],
+        opportunity_id=row["opportunity_id"],
+        name=row["name"],
+        email=row["email"],
+        phone=row["phone"],
+        title=row["title"],
+        source=row["source"],
+        confidence=row["confidence"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def get_contacts_for_opportunity(
+    conn: sqlite3.Connection, opportunity_id: str
+) -> list[Contact]:
+    rows = conn.execute(
+        "SELECT * FROM contacts WHERE opportunity_id = ? ORDER BY confidence DESC",
+        (opportunity_id,),
+    ).fetchall()
+    return [_row_to_contact(row) for row in rows]
+
+
+def get_contact(conn: sqlite3.Connection, contact_id: str) -> Contact | None:
+    row = conn.execute("SELECT * FROM contacts WHERE id = ?", (contact_id,)).fetchone()
+    return _row_to_contact(row) if row else None
+
+
+def delete_contacts_for_opportunity(
+    conn: sqlite3.Connection, opportunity_id: str
+) -> None:
+    conn.execute("DELETE FROM contacts WHERE opportunity_id = ?", (opportunity_id,))
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Processed Email CRUD
+# ---------------------------------------------------------------------------
+
+
+def is_email_processed(conn: sqlite3.Connection, message_id: str) -> bool:
+    """Return True if a message_id has already been processed."""
+    cur = conn.execute(
+        "SELECT 1 FROM processed_emails WHERE message_id = ?", (message_id,)
+    )
+    return cur.fetchone() is not None
+
+
+def save_processed_email(
+    conn: sqlite3.Connection,
+    *,
+    id: str,
+    message_id: str,
+    from_address: str | None,
+    subject: str | None,
+    received_at: str | None,
+    category: str | None,
+    matched_app_id: str | None,
+    summary: str | None,
+    processed_at: str,
+) -> None:
+    """Record an email as processed (idempotent via UNIQUE on message_id)."""
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO processed_emails
+            (id, message_id, from_address, subject, received_at,
+             category, matched_app_id, summary, processed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            id,
+            message_id,
+            from_address,
+            subject,
+            received_at,
+            category,
+            matched_app_id,
+            summary,
+            processed_at,
+        ),
+    )
+    conn.commit()
+
+
+def list_processed_emails(conn: sqlite3.Connection, *, limit: int = 50) -> list[dict]:
+    """Return recent processed emails as dicts, newest first."""
+    cur = conn.execute(
+        "SELECT * FROM processed_emails ORDER BY processed_at DESC LIMIT ?",
+        (limit,),
+    )
+    return [dict(row) for row in cur.fetchall()]
+
+
+# ---------------------------------------------------------------------------
+# Full-text search
+# ---------------------------------------------------------------------------
+
+
+def rebuild_search_index(conn: sqlite3.Connection) -> None:
+    """Rebuild the FTS5 search index from the opportunities table.
+
+    Safe to call repeatedly — clears and repopulates every time.
+    Should be called after bulk inserts (scan, search agent, etc.).
+    """
+    conn.execute("DELETE FROM opportunities_fts")
+    conn.execute(
+        """
+        INSERT INTO opportunities_fts (opp_id, company, title, description, location)
+        SELECT id, company, title, COALESCE(description, ''), COALESCE(location, '')
+        FROM opportunities
+        """
+    )
+    conn.commit()
+
+
+def search_opportunities(
+    conn: sqlite3.Connection,
+    query: str,
+    *,
+    limit: int = 20,
+) -> list[tuple[Opportunity, Application | None]]:
+    """Full-text search over opportunities, joined with their application.
+
+    Returns up to *limit* ``(Opportunity, Application | None)`` tuples
+    ranked by BM25 relevance.  The query string uses FTS5 syntax — plain
+    words are implicitly ANDed, ``*`` for prefix, ``"`` for phrases.
+
+    If the FTS table is empty or the query matches nothing, returns ``[]``.
+    """
+    query = query.strip()
+    if not query:
+        return []
+
+    # Lazy-populate: rebuild the index on first search if it's empty but
+    # opportunities exist.  This covers the case where the DB was created
+    # before FTS was added, or after init_db (which intentionally does NOT
+    # rebuild to avoid locking issues in concurrent environments).
+    fts_count = conn.execute("SELECT COUNT(*) FROM opportunities_fts").fetchone()[0]
+    if fts_count == 0:
+        opp_count = conn.execute("SELECT COUNT(*) FROM opportunities").fetchone()[0]
+        if opp_count > 0:
+            rebuild_search_index(conn)
+
+    # Tokenise into words and add implicit prefix wildcard to the last term
+    # so that partial typing works (e.g. "devops chat" → "devops chat*").
+    tokens = query.split()
+    fts_query = " ".join(tokens[:-1] + [tokens[-1] + "*"]) if tokens else query
+
+    try:
+        cur = conn.execute(
+            """
+            SELECT
+                o.*,
+                a.id            AS app_id,
+                a.status        AS app_status,
+                a.score         AS app_score,
+                a.justification AS app_justification,
+                a.day_to_day    AS app_day_to_day,
+                a.why_it_fits   AS app_why_it_fits,
+                a.created_at    AS app_created_at,
+                a.updated_at    AS app_updated_at
+            FROM opportunities_fts fts
+            JOIN opportunities o ON o.id = fts.opp_id
+            LEFT JOIN applications a ON a.opportunity_id = o.id
+            WHERE opportunities_fts MATCH ?
+            ORDER BY bm25(opportunities_fts)
+            LIMIT ?
+            """,
+            (fts_query, limit),
+        )
+    except sqlite3.OperationalError:
+        # Bad FTS syntax — fall back to empty results rather than crash.
+        return []
+
+    results: list[tuple[Opportunity, Application | None]] = []
+    for row in cur.fetchall():
+        opp = _row_to_opportunity(row)
+        app: Application | None = None
+        if row["app_id"] is not None:
+            app = Application(
+                id=row["app_id"],
+                opportunity_id=opp.id,
+                status=ApplicationStatus(row["app_status"]),
+                score=row["app_score"],
+                justification=row["app_justification"],
+                day_to_day=row["app_day_to_day"],
+                why_it_fits=row["app_why_it_fits"],
+                created_at=_str_to_datetime(row["app_created_at"]),  # type: ignore[arg-type]
+                updated_at=_str_to_datetime(row["app_updated_at"]),  # type: ignore[arg-type]
+            )
+        results.append((opp, app))
+    return results

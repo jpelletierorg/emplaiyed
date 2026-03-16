@@ -10,11 +10,13 @@ Framework choice: **Pydantic AI**
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TypeVar
 
 from pydantic import BaseModel
 from pydantic_ai import Agent
+from pydantic_ai.exceptions import ModelAPIError
 from pydantic_ai.models import Model
 from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.providers.openrouter import OpenRouterProvider
@@ -24,6 +26,17 @@ from emplaiyed.llm.config import DEFAULT_MODEL, get_api_key
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+_MAX_RETRIES = 2
+_RETRY_BACKOFF = 1.0
+
+_TRANSIENT_ERROR_TERMS = ("connection", "timeout", "network", "unreachable")
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Check if an exception looks like a transient network error."""
+    msg = str(exc).lower()
+    return any(term in msg for term in _TRANSIENT_ERROR_TERMS)
 
 
 def _build_model(model: str | None = None) -> Model:
@@ -62,8 +75,19 @@ async def complete(
     llm = _model_override or _build_model(model)
     logger.debug("LLM call (text): model=%s, prompt_len=%d", llm, len(prompt))
     agent: Agent[None, str] = Agent(llm, output_type=str, system_prompt=system_prompt or "")
-    result = await agent.run(prompt)
-    return result.output
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await agent.run(prompt)
+            return result.output
+        except ModelAPIError as exc:
+            if attempt < _MAX_RETRIES and _is_transient_error(exc):
+                wait = _RETRY_BACKOFF * (attempt + 1)
+                logger.warning("Connection error (attempt %d/%d), retrying in %.0fs: %s",
+                               attempt + 1, _MAX_RETRIES + 1, wait, exc)
+                await asyncio.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover
 
 
 async def complete_structured(
@@ -95,5 +119,16 @@ async def complete_structured(
     llm = _model_override or _build_model(model)
     logger.debug("LLM call (structured → %s): model=%s, prompt_len=%d", output_type.__name__, llm, len(prompt))
     agent: Agent[None, T] = Agent(llm, output_type=output_type, system_prompt=system_prompt or "")
-    result = await agent.run(prompt)
-    return result.output
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            result = await agent.run(prompt)
+            return result.output
+        except ModelAPIError as exc:
+            if attempt < _MAX_RETRIES and _is_transient_error(exc):
+                wait = _RETRY_BACKOFF * (attempt + 1)
+                logger.warning("Connection error (attempt %d/%d), retrying in %.0fs: %s",
+                               attempt + 1, _MAX_RETRIES + 1, wait, exc)
+                await asyncio.sleep(wait)
+                continue
+            raise
+    raise RuntimeError("unreachable")  # pragma: no cover

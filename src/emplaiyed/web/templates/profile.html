@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+
+{% block title %}Profile - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+  <h1 class="text-3xl font-bold mb-6">Profile</h1>
+
+  {% if profile %}
+  <!-- Header -->
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <div class="flex items-start justify-between">
+        <div>
+          <h2 class="text-2xl font-bold">{{ profile.name }}</h2>
+          <p class="text-base-content/60">{{ profile.email }}</p>
+          {% if profile.phone %}<p class="text-base-content/60">{{ profile.phone }}</p>{% endif %}
+          {% if profile.address and profile.address.city %}
+            <p class="text-base-content/50 text-sm mt-1">
+              {{ profile.address.city }}{% if profile.address.province_state %}, {{ profile.address.province_state }}{% endif %}
+              {% if profile.address.country %} &middot; {{ profile.address.country }}{% endif %}
+            </p>
+          {% endif %}
+        </div>
+        <div class="flex gap-2 flex-wrap">
+          <a href="/profile/edit" class="btn btn-primary btn-sm">Edit Profile</a>
+          <a href="/profile/enhance" class="btn btn-secondary btn-sm">Enhance Highlights</a>
+          <a href="/profile/build" class="btn btn-outline btn-sm">Rebuild Profile</a>
+          {% if profile.linkedin %}
+          <a href="{{ profile.linkedin }}" target="_blank" class="btn btn-ghost btn-sm">LinkedIn</a>
+          {% endif %}
+          {% if profile.github %}
+          <a href="{{ profile.github }}" target="_blank" class="btn btn-ghost btn-sm">GitHub</a>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Skills -->
+  {% if profile.skills %}
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h3 class="card-title text-lg mb-3">Skills</h3>
+      <div class="flex flex-wrap gap-2">
+        {% for skill in profile.skills %}
+        <span class="badge badge-primary badge-outline">{{ skill }}</span>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Aspirations -->
+  {% if profile.aspirations %}
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h3 class="card-title text-lg mb-3">Aspirations</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {% if profile.aspirations.target_roles %}
+        <div>
+          <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">Target Roles</p>
+          <p>{{ profile.aspirations.target_roles | join(", ") }}</p>
+        </div>
+        {% endif %}
+        {% if profile.aspirations.work_arrangement %}
+        <div>
+          <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">Arrangement</p>
+          <p>{{ profile.aspirations.work_arrangement | join(", ") }}</p>
+        </div>
+        {% endif %}
+        {% if profile.aspirations.salary_minimum or profile.aspirations.salary_target %}
+        <div>
+          <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">Salary Range</p>
+          <p>
+            {% if profile.aspirations.salary_minimum %}${{ "{:,}".format(profile.aspirations.salary_minimum) }}{% endif %}
+            {% if profile.aspirations.salary_minimum and profile.aspirations.salary_target %} - {% endif %}
+            {% if profile.aspirations.salary_target %}${{ "{:,}".format(profile.aspirations.salary_target) }}{% endif %}
+          </p>
+        </div>
+        {% endif %}
+        {% if profile.aspirations.geographic_preferences %}
+        <div>
+          <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">Location Preferences</p>
+          <p>{{ profile.aspirations.geographic_preferences | join(", ") }}</p>
+        </div>
+        {% endif %}
+        {% if profile.aspirations.urgency %}
+        <div>
+          <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">Urgency</p>
+          <p>{{ profile.aspirations.urgency }}</p>
+        </div>
+        {% endif %}
+      </div>
+      {% if profile.aspirations.statement %}
+      <div class="mt-4 p-4 bg-base-200 rounded-lg">
+        <p class="text-sm italic">{{ profile.aspirations.statement }}</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Employment History -->
+  {% if profile.employment_history %}
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h3 class="card-title text-lg mb-3">Employment History</h3>
+      <div class="space-y-6">
+        {% for job in profile.employment_history %}
+        <div class="border-l-2 border-primary pl-4">
+          <div class="flex items-baseline justify-between">
+            <h4 class="font-semibold">{{ job.title }}</h4>
+            <span class="text-sm text-base-content/50">
+              {{ job.start_date.strftime("%b %Y") if job.start_date else "?" }}
+              -
+              {{ job.end_date.strftime("%b %Y") if job.end_date else "Present" }}
+            </span>
+          </div>
+          <p class="text-base-content/60">{{ job.company }}</p>
+          {% if job.description %}
+          <p class="text-sm mt-1">{{ job.description }}</p>
+          {% endif %}
+          {% if job.highlights %}
+          <ul class="list-disc list-inside mt-2 space-y-1 text-sm text-base-content/80">
+            {% for h in job.highlights %}
+            <li>{{ h }}</li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Education -->
+  {% if profile.education %}
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h3 class="card-title text-lg mb-3">Education</h3>
+      {% for edu in profile.education %}
+      <div class="mb-3 last:mb-0">
+        <p class="font-semibold">{{ edu.degree }} in {{ edu.field }}</p>
+        <p class="text-base-content/60 text-sm">{{ edu.institution }}
+          {% if edu.end_date %} &middot; {{ edu.end_date.strftime("%Y") }}{% endif %}
+        </p>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Languages -->
+  {% if profile.languages %}
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h3 class="card-title text-lg mb-3">Languages</h3>
+      <div class="flex flex-wrap gap-3">
+        {% for lang in profile.languages %}
+        <div class="badge badge-lg gap-1">
+          {{ lang.language }} <span class="text-base-content/50">({{ lang.proficiency }})</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <!-- No profile yet -->
+  <div class="text-center py-16">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-20 w-20 mx-auto mb-4 text-base-content/20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+    </svg>
+    <h2 class="text-xl font-semibold mb-2 text-base-content/60">No profile yet</h2>
+    <p class="text-base-content/40 mb-6">Build your profile to get started with job searching.</p>
+    <a href="/profile/build" class="btn btn-primary">Build Profile</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

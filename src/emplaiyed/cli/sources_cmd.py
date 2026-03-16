@@ -164,69 +164,23 @@ def _eager_generate_assets(profile, scored, db_conn) -> int:
         return 0
 
 
-def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
-        return text
-    return text[:limit - 1] + "\u2026"
-
-
 def _show_scored_table(source, scored, db_conn, asset_count):
-    """Display scored results table."""
-    apps = list_applications(db_conn, status=ApplicationStatus.OUTREACH_PENDING)
-    asset_opp_ids = {a.opportunity_id for a in apps}
-    has_assets = bool(asset_opp_ids)
-
-    table = Table(title=f"Results from {source} (scored)")
-    table.add_column("#", style="dim", width=3)
-    table.add_column("Score", justify="right", width=5)
-    table.add_column("Company", style="cyan", max_width=20)
-    table.add_column("Title", style="green", max_width=25)
-    table.add_column("Location", max_width=15)
-    table.add_column("Why")
-    if has_assets:
-        table.add_column("Assets", justify="center", width=6)
-
-    for i, so in enumerate(scored, 1):
-        score_style = "bold green" if so.score >= 80 else ("yellow" if so.score >= 50 else "dim")
-        loc = _truncate(so.opportunity.location, 20) if so.opportunity.location else "-"
-        row = [
-            str(i),
-            f"[{score_style}]{so.score}[/{score_style}]",
-            so.opportunity.company,
-            so.opportunity.title,
-            loc,
-            _truncate(so.justification, 80),
-        ]
-        if has_assets:
-            row.append("Y" if so.opportunity.id in asset_opp_ids else "")
-        table.add_row(*row)
-
-    console.print(table)
+    """Display scored results summary."""
     above_70 = sum(1 for s in scored if s.score >= 70)
     console.print(
         f"\n[green]{len(scored)} opportunities scored. {above_70} scored above 70.[/green]"
     )
     if asset_count:
         console.print(
-            f"[blue]{asset_count} work items created with generated assets.[/blue] "
-            f"Run `emplaiyed work list` to review."
+            f"[blue]{asset_count} sets of assets generated.[/blue]"
         )
+    console.print("Run [cyan]emplaiyed console[/cyan] to review and manage them.")
 
 
 def _show_unscored_table(source, results):
-    """Display unscored results table."""
-    table = Table(title=f"Results from {source}")
-    table.add_column("#", style="dim")
-    table.add_column("Company", style="cyan")
-    table.add_column("Title", style="green")
-    table.add_column("Location")
-    table.add_column("URL", style="blue")
-
-    for i, opp in enumerate(results, 1):
-        table.add_row(str(i), opp.company, opp.title, opp.location or "-", opp.source_url or "-")
-
-    console.print(table)
+    """Display unscored results summary."""
     console.print(f"\n[green]{len(results)} new opportunities saved (unscored).[/green]")
+    console.print("Run [cyan]emplaiyed console[/cyan] to review and manage them.")
 
 
 def _derive_from_profile(profile, location):
@@ -247,6 +201,67 @@ def _derive_from_profile(profile, location):
                 break
 
     return kw_list, location
+
+
+@sources_app.command("search")
+def search(
+    direction: Optional[str] = typer.Argument(
+        None, help="Steer the search, e.g. 'find me ML research roles for an applied AI engineer'."
+    ),
+    max_results: int = typer.Option(50, "--max-results", "-n", help="Target number of opportunities."),
+    time_limit: int = typer.Option(300, "--time", "-t", help="Max search duration in seconds (default: 300 = 5min)."),
+):
+    """Agentic search — AI finds jobs across all sources automatically.
+
+    Optionally pass a direction to steer the search:
+        emplaiyed sources search "find me applied AI engineer roles building agents"
+    """
+    from emplaiyed.sources.search_agent import agentic_search
+
+    profile = try_load_profile()
+    if not profile:
+        console.print(
+            "[red]Profile required for agentic search.[/red]\n"
+            "Build one first with: emplaiyed profile build"
+        )
+        raise typer.Exit(code=1)
+
+    sources = get_available_sources()
+
+    def _progress(msg: str) -> None:
+        console.print(f"  [dim]{msg}[/dim]")
+
+    db_conn = init_db(get_default_db_path())
+    try:
+        result = asyncio.run(
+            agentic_search(
+                profile, sources, direction=direction,
+                time_limit=time_limit,
+                db_conn=db_conn, on_progress=_progress,
+            )
+        )
+
+        if not result.opportunities:
+            console.print("[yellow]No opportunities found.[/yellow]")
+            return
+
+        # Opportunities are already persisted as they're found by the agent.
+        console.print(
+            f"\n[green]{len(result.opportunities)} opportunities found "
+            f"and saved to database.[/green]"
+        )
+        console.print(f"[dim]Queries used: {len(result.queries_used)}[/dim]")
+        console.print(f"[dim]Summary: {result.summary}[/dim]")
+
+        # Score if possible
+        scored = _score_results(profile, result.opportunities, db_conn)
+        if scored:
+            asset_count = _eager_generate_assets(profile, scored, db_conn)
+            _show_scored_table("agentic", scored, db_conn, asset_count)
+        else:
+            console.print("\nRun [cyan]emplaiyed console[/cyan] to review.")
+    finally:
+        db_conn.close()
 
 
 def _probe_source_status(source) -> str:

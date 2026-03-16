@@ -366,3 +366,54 @@ class ScheduleInterviewModal(ModalScreen[dict | None]):
 
     def action_cancel(self) -> None:
         self.dismiss(None)
+
+
+class ConfirmDeleteModal(ModalScreen[bool]):
+    """Confirmation modal for deleting an application and its assets."""
+
+    CSS = """
+    ConfirmDeleteModal {
+        align: center middle;
+    }
+    #delete-dialog {
+        width: 60;
+        height: auto;
+        max-height: 14;
+        border: thick $error;
+        padding: 1 2;
+    }
+    .modal-buttons {
+        height: 3;
+        align: center middle;
+    }
+    """
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, title: str, company: str) -> None:
+        super().__init__()
+        self._title = title
+        self._company = company
+
+    def compose(self) -> ComposeResult:
+        from textual.containers import Horizontal
+
+        with Vertical(id="delete-dialog"):
+            yield Label("[bold red]Delete this opportunity?[/bold red]")
+            yield Static(
+                f"\n  {self._company} — {self._title}\n\n"
+                "This will permanently delete the application,\n"
+                "all related data, and generated assets."
+            )
+            with Horizontal(classes="modal-buttons"):
+                yield Button("Delete", variant="error", id="delete-btn")
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "delete-btn":
+            self.dismiss(True)
+        elif event.button.id == "cancel-btn":
+            self.dismiss(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)

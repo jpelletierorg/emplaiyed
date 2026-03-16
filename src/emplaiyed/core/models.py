@@ -1,15 +1,26 @@
 from __future__ import annotations
 
 import enum
+import secrets
+import string
 from datetime import date, datetime
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+_SHORT_ID_ALPHABET = string.ascii_letters + string.digits  # a-zA-Z0-9
+_SHORT_ID_LENGTH = 6
+
+
+def _generate_short_id() -> str:
+    """Generate a 6-character alphanumeric short ID (e.g. 'r8dZcf')."""
+    return "".join(secrets.choice(_SHORT_ID_ALPHABET) for _ in range(_SHORT_ID_LENGTH))
+
 
 # ---------------------------------------------------------------------------
 # Sub-models (used inside Profile)
 # ---------------------------------------------------------------------------
+
 
 class Address(BaseModel):
     street: str | None = None
@@ -48,9 +59,17 @@ class Certification(BaseModel):
     expiry_date: date | None = None
 
 
+class Project(BaseModel):
+    name: str
+    description: str
+    url: str | None = None  # GitHub link, live demo, etc.
+    technologies: list[str] = Field(default_factory=list)
+
+
 class Aspirations(BaseModel):
     target_roles: list[str] = Field(default_factory=list)
     target_industries: list[str] = Field(default_factory=list)
+    excluded_industries: list[str] = Field(default_factory=list)
     salary_minimum: int | None = None
     salary_target: int | None = None
     urgency: str | None = None
@@ -71,17 +90,21 @@ class SmtpConfig(BaseModel):
 # Profile
 # ---------------------------------------------------------------------------
 
+
 class Profile(BaseModel):
     name: str
     email: str
     phone: str | None = None
     date_of_birth: date | None = None
     address: Address | None = None
+    linkedin: str | None = None
+    github: str | None = None
     skills: list[str] = Field(default_factory=list)
     languages: list[Language] = Field(default_factory=list)
     education: list[Education] = Field(default_factory=list)
     employment_history: list[Employment] = Field(default_factory=list)
     certifications: list[Certification] = Field(default_factory=list)
+    projects: list[Project] = Field(default_factory=list)
     aspirations: Aspirations | None = None
     smtp_config: SmtpConfig | None = None
 
@@ -90,8 +113,10 @@ class Profile(BaseModel):
 # Opportunity pipeline
 # ---------------------------------------------------------------------------
 
+
 class Opportunity(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
+    short_id: str = Field(default_factory=_generate_short_id)
     source: str
     source_url: str | None = None
     company: str
@@ -103,6 +128,20 @@ class Opportunity(BaseModel):
     posted_date: date | None = None
     scraped_at: datetime
     raw_data: dict | None = None
+
+
+class Contact(BaseModel):
+    """A person associated with a job opportunity (recruiter, hiring manager, etc.)."""
+
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    opportunity_id: str
+    name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    title: str | None = None  # e.g. "Recruiter", "Hiring Manager"
+    source: str = "llm"  # "llm", "json_ld", "regex", "html_parse", "manual"
+    confidence: float = 0.0  # 0.0-1.0, how confident the extraction was
+    created_at: datetime = Field(default_factory=datetime.now)
 
 
 class ScoredOpportunity(BaseModel):
@@ -117,9 +156,11 @@ class ScoredOpportunity(BaseModel):
 # Enums
 # ---------------------------------------------------------------------------
 
+
 class ApplicationStatus(str, enum.Enum):
     DISCOVERED = "DISCOVERED"
     SCORED = "SCORED"
+    BELOW_THRESHOLD = "BELOW_THRESHOLD"
     OUTREACH_PENDING = "OUTREACH_PENDING"
     OUTREACH_SENT = "OUTREACH_SENT"
     FOLLOW_UP_PENDING = "FOLLOW_UP_PENDING"
@@ -161,6 +202,7 @@ class OfferStatus(str, enum.Enum):
 # Application / Interaction / Offer
 # ---------------------------------------------------------------------------
 
+
 class Application(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     opportunity_id: str
@@ -201,10 +243,13 @@ class Offer(BaseModel):
 # Scheduled Event
 # ---------------------------------------------------------------------------
 
+
 class ScheduledEvent(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid4()))
     application_id: str
-    event_type: str  # "phone_screen", "technical_interview", "onsite", "follow_up_due", etc.
+    event_type: (
+        str  # "phone_screen", "technical_interview", "onsite", "follow_up_due", etc.
+    )
     scheduled_date: datetime
     notes: str | None = None
     created_at: datetime
@@ -220,12 +265,21 @@ class WorkType(str, enum.Enum):
     FOLLOW_UP = "FOLLOW_UP"
     NEGOTIATE = "NEGOTIATE"
     ACCEPT = "ACCEPT"
+    REVIEW_RESPONSE = "REVIEW_RESPONSE"
 
 
 class WorkStatus(str, enum.Enum):
     PENDING = "PENDING"
     COMPLETED = "COMPLETED"
     SKIPPED = "SKIPPED"
+
+
+class StatusTransition(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    application_id: str
+    from_status: str  # ApplicationStatus value
+    to_status: str  # ApplicationStatus value
+    transitioned_at: datetime
 
 
 class WorkItem(BaseModel):

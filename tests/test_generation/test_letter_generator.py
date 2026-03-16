@@ -50,34 +50,46 @@ def opportunity() -> Opportunity:
 
 class TestBuildLetterPrompt:
     def test_includes_candidate_name(self, profile, opportunity):
-        prompt = _build_letter_prompt(profile, opportunity)
+        prompt = _build_letter_prompt(profile, opportunity, "English")
         assert "Alice Test" in prompt
 
     def test_includes_company(self, profile, opportunity):
-        prompt = _build_letter_prompt(profile, opportunity)
+        prompt = _build_letter_prompt(profile, opportunity, "English")
         assert "BigCorp" in prompt
 
     def test_includes_career_statement(self, profile, opportunity):
-        prompt = _build_letter_prompt(profile, opportunity)
+        prompt = _build_letter_prompt(profile, opportunity, "English")
         assert "cloud infrastructure at scale" in prompt
 
     def test_includes_recent_role(self, profile, opportunity):
-        prompt = _build_letter_prompt(profile, opportunity)
+        prompt = _build_letter_prompt(profile, opportunity, "English")
         assert "Senior Dev" in prompt
         assert "Acme" in prompt
+
+    def test_prompt_includes_explicit_language(self, profile, opportunity):
+        prompt = _build_letter_prompt(profile, opportunity, "English")
+        assert "English" in prompt
+        assert "detect" not in prompt.lower()
 
 
 class TestGenerateLetter:
     async def test_returns_generated_letter(self, profile, opportunity):
         model = TestModel()
-        result = await generate_letter(profile, opportunity, _model_override=model)
+        result = await generate_letter(
+            profile, opportunity, language="English", _model_override=model
+        )
         assert isinstance(result, GeneratedLetter)
 
     async def test_generated_letter_has_required_fields(self, profile, opportunity):
         model = TestModel()
-        result = await generate_letter(profile, opportunity, _model_override=model)
+        result = await generate_letter(
+            profile, opportunity, language="English", _model_override=model
+        )
         assert result.greeting
-        assert result.body
+        assert result.hook
+        assert result.proof
+        assert result.close
+        assert result.body  # combined property
         assert result.closing
         assert result.signature_name
 
@@ -86,9 +98,12 @@ class TestGeneratedLetterModel:
     def test_creation(self):
         letter = GeneratedLetter(
             greeting="Dear Hiring Manager,",
-            body="I am writing to express my interest...",
+            hook="Your team is scaling cloud infrastructure...",
+            proof="At my previous role, I reduced costs by 37%...",
+            close="I'd love to discuss how I can help.",
             closing="Sincerely,",
             signature_name="Alice Test",
         )
         assert letter.greeting.startswith("Dear")
         assert letter.signature_name == "Alice Test"
+        assert "scaling" in letter.body  # combined property includes hook

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "AI-powered job seeking toolkit"
 readme = "README.md"
 authors = [
-    { name = "Jonathan Pelletier", email = "jonathanp@untestament.ca" }
+    { name = "jpelletierorg", email = "moi@jpelletier.org" }
 ]
 requires-python = ">=3.12"
 dependencies = [
@@ -17,8 +17,15 @@ dependencies = [
     "beautifulsoup4>=4.14.3",
     "pdfminer.six>=20231228",
     "python-dotenv>=1.2.1",
-    "fpdf2>=2.8",
+    "jinja2>=3.1",
+    "weasyprint>=63.0",
     "textual>=3.0",
+    "fastapi[standard]>=0.115",
+    "sse-starlette>=2.0",
+    "python-docx>=1.1",
+    "python-jobspy>=1.1.80",
+    "imapclient>=3.0",
+    "html2text>=2024.2",
 ]
 
 [project.scripts]

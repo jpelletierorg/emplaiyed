@@ -58,24 +58,38 @@ def _seed_queue(conn: sqlite3.Connection, count: int = 3) -> list[WorkItem]:
     now = datetime.now()
     items = []
     for i in range(count):
-        save_opportunity(conn, Opportunity(
-            id=f"opp-{i}", source="jobbank",
-            source_url=f"https://jobbank.gc.ca/job/{i}",
-            company=f"Corp{i}", title=f"Role{i}",
-            description=f"Description for role {i}.",
-            location="Montreal, QC", scraped_at=now,
-        ))
-        save_application(conn, Application(
-            id=f"app-{i}", opportunity_id=f"opp-{i}",
-            status=ApplicationStatus.OUTREACH_PENDING,
-            score=80 + i, justification=f"Good fit #{i}",
-            day_to_day=f"Day-to-day work for role {i}.",
-            why_it_fits=f"Fits because of skill {i}.",
-            created_at=now, updated_at=now,
-        ))
+        save_opportunity(
+            conn,
+            Opportunity(
+                id=f"opp-{i}",
+                source="jobbank",
+                source_url=f"https://jobbank.gc.ca/job/{i}",
+                company=f"Corp{i}",
+                title=f"Role{i}",
+                description=f"Description for role {i}.",
+                location="Montreal, QC",
+                scraped_at=now,
+            ),
+        )
+        save_application(
+            conn,
+            Application(
+                id=f"app-{i}",
+                opportunity_id=f"opp-{i}",
+                status=ApplicationStatus.OUTREACH_PENDING,
+                score=80 + i,
+                justification=f"Good fit #{i}",
+                day_to_day=f"Day-to-day work for role {i}.",
+                why_it_fits=f"Fits because of skill {i}.",
+                created_at=now,
+                updated_at=now,
+            ),
+        )
         wi = WorkItem(
-            id=f"wi-{i}", application_id=f"app-{i}",
-            work_type=WorkType.OUTREACH, status=WorkStatus.PENDING,
+            id=f"wi-{i}",
+            application_id=f"app-{i}",
+            work_type=WorkType.OUTREACH,
+            status=WorkStatus.PENDING,
             title=f"Apply to Corp{i} — Role{i}",
             instructions=f"Send the email for role {i}.",
             target_status=ApplicationStatus.OUTREACH_SENT.value,
@@ -99,28 +113,63 @@ def _seed_pipeline(conn: sqlite3.Connection) -> None:
         ("opp-f", "CorpF", "app-f", ApplicationStatus.GHOSTED, 70),
     ]
     for opp_id, company, app_id, status, score in stages:
-        save_opportunity(conn, Opportunity(
-            id=opp_id, source="test", company=company,
-            title=f"{company} Role", description="Test", scraped_at=now,
-        ))
-        save_application(conn, Application(
-            id=app_id, opportunity_id=opp_id, status=status,
-            score=score, created_at=now, updated_at=now,
-        ))
+        save_opportunity(
+            conn,
+            Opportunity(
+                id=opp_id,
+                source="test",
+                company=company,
+                title=f"{company} Role",
+                description="Test",
+                scraped_at=now,
+            ),
+        )
+        save_application(
+            conn,
+            Application(
+                id=app_id,
+                opportunity_id=opp_id,
+                status=status,
+                score=score,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
 
 
-def _seed_app(conn, *, app_id="app-x", opp_id="opp-x", company="TestCo",
-              status=ApplicationStatus.OUTREACH_SENT, score=80):
+def _seed_app(
+    conn,
+    *,
+    app_id="app-x",
+    opp_id="opp-x",
+    company="TestCo",
+    status=ApplicationStatus.OUTREACH_SENT,
+    score=80,
+):
     """Seed a single app at any status."""
     now = datetime.now()
-    save_opportunity(conn, Opportunity(
-        id=opp_id, source="test", company=company,
-        title=f"{company} Role", description="Test", scraped_at=now,
-    ))
-    save_application(conn, Application(
-        id=app_id, opportunity_id=opp_id, status=status,
-        score=score, created_at=now, updated_at=now,
-    ))
+    save_opportunity(
+        conn,
+        Opportunity(
+            id=opp_id,
+            source="test",
+            company=company,
+            title=f"{company} Role",
+            description="Test",
+            scraped_at=now,
+        ),
+    )
+    save_application(
+        conn,
+        Application(
+            id=app_id,
+            opportunity_id=opp_id,
+            status=status,
+            score=score,
+            created_at=now,
+            updated_at=now,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,14 +225,22 @@ class TestQueue:
         """SCORED apps (no work items) appear in Queue; d/p work on them."""
         now = datetime.now()
         for i in range(2):
-            _seed_app(db, app_id=f"app-s{i}", opp_id=f"opp-s{i}",
-                       company=f"Scored{i}", status=ApplicationStatus.SCORED, score=75 + i)
+            _seed_app(
+                db,
+                app_id=f"app-s{i}",
+                opp_id=f"opp-s{i}",
+                company=f"Scored{i}",
+                status=ApplicationStatus.SCORED,
+                score=75 + i,
+            )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             assert app.query_one("#list-queue").option_count == 2
             # d on SCORED creates work item and completes it
             await pilot.press("d")
-            assert get_application(db, "app-s1").status == ApplicationStatus.OUTREACH_SENT
+            assert (
+                get_application(db, "app-s1").status == ApplicationStatus.OUTREACH_SENT
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +252,7 @@ class TestTabsAndPipeline:
     async def test_tab_cycle_and_check_action(self, db, db_path):
         """Arrow keys cycle tabs; check_action gates per tab; labels show counts."""
         from textual.widgets import TabbedContent
+
         _seed_pipeline(db)
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
@@ -203,7 +261,15 @@ class TestTabsAndPipeline:
             for _ in range(6):
                 await pilot.press("right")
                 tabs.append(app._active_tab)
-            assert tabs == ["Queue", "Applied", "Active", "Offers", "Closed", "Funnel", "Queue"]
+            assert tabs == [
+                "Queue",
+                "Applied",
+                "Active",
+                "Offers",
+                "Closed",
+                "Funnel",
+                "Queue",
+            ]
 
             # Left wraps
             await pilot.press("left")
@@ -272,6 +338,7 @@ class TestAppliedActions:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "response-input":
                     w.value = "Recruiter called back"
@@ -294,6 +361,7 @@ class TestAppliedActions:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "response-input":
                     w.value = "Phone screen scheduled"
@@ -301,7 +369,10 @@ class TestAppliedActions:
                     w.value = "2025-04-01 10:00"
             await pilot.click("#save-btn")
             await pilot.pause()
-            assert get_application(db, "app-a").status == ApplicationStatus.INTERVIEW_SCHEDULED
+            assert (
+                get_application(db, "app-a").status
+                == ApplicationStatus.INTERVIEW_SCHEDULED
+            )
             assert len(list_events(db, application_id="app-a")) == 1
 
     async def test_response_cancel_and_wrong_tab_noop(self, db, db_path):
@@ -311,7 +382,9 @@ class TestAppliedActions:
         async with app.run_test(size=(80, 50)) as pilot:
             # Wrong tab: r on Queue is no-op
             await pilot.press("r")
-            assert get_application(db, "app-a").status == ApplicationStatus.OUTREACH_SENT
+            assert (
+                get_application(db, "app-a").status == ApplicationStatus.OUTREACH_SENT
+            )
 
             # Cancel modal: no transition
             await pilot.press("right")  # Applied
@@ -320,7 +393,9 @@ class TestAppliedActions:
             await pilot.pause()
             await pilot.click("#cancel-btn")
             await pilot.pause()
-            assert get_application(db, "app-a").status == ApplicationStatus.OUTREACH_SENT
+            assert (
+                get_application(db, "app-a").status == ApplicationStatus.OUTREACH_SENT
+            )
 
     async def test_ghosted_and_note(self, db, db_path):
         """g transitions to GHOSTED; n opens NoteModal and saves interaction."""
@@ -333,6 +408,7 @@ class TestAppliedActions:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "note-input":
                     w.value = "Interesting opportunity"
@@ -355,8 +431,13 @@ class TestAppliedActions:
 class TestFollowUp:
     async def test_followup_chain(self, db, db_path):
         """f on OUTREACH_SENT → FU1, f on FU1 → FU2, f on FU2 → no-op."""
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.OUTREACH_SENT)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.OUTREACH_SENT,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")  # Applied
@@ -366,6 +447,7 @@ class TestFollowUp:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "followup-input":
                     w.value = "First follow-up"
@@ -375,8 +457,13 @@ class TestFollowUp:
             assert list_interactions(db, "app-a")[0].type == InteractionType.FOLLOW_UP
 
     async def test_followup_fu1_to_fu2(self, db, db_path):
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.FOLLOW_UP_1)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.FOLLOW_UP_1,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")
@@ -384,6 +471,7 @@ class TestFollowUp:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "followup-input":
                     w.value = "Second follow-up"
@@ -393,8 +481,13 @@ class TestFollowUp:
 
     async def test_followup_fu2_noop_and_cancel(self, db, db_path):
         """f on FU2 is no-op; cancelling modal doesn't transition."""
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.FOLLOW_UP_2)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.FOLLOW_UP_2,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")
@@ -411,18 +504,33 @@ class TestFollowUp:
 class TestActiveActions:
     async def test_completed_rejected_and_schedule(self, db, db_path):
         """c completes interview; x rejects; s schedules with modal."""
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.INTERVIEW_SCHEDULED, score=90)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.INTERVIEW_SCHEDULED,
+            score=90,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")  # Applied
             await pilot.press("right")  # Active
-            await pilot.press("c")      # Completed
-            assert get_application(db, "app-a").status == ApplicationStatus.INTERVIEW_COMPLETED
+            await pilot.press("c")  # Completed
+            assert (
+                get_application(db, "app-a").status
+                == ApplicationStatus.INTERVIEW_COMPLETED
+            )
 
     async def test_schedule_interview_creates_event(self, db, db_path):
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.INTERVIEW_SCHEDULED, score=90)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.INTERVIEW_SCHEDULED,
+            score=90,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")  # Applied
@@ -431,6 +539,7 @@ class TestActiveActions:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "date-input":
                     w.value = "2025-04-01 10:00"
@@ -441,8 +550,14 @@ class TestActiveActions:
             assert events[0].event_type == "phone_screen"
 
     async def test_mark_rejected(self, db, db_path):
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.INTERVIEW_SCHEDULED, score=90)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.INTERVIEW_SCHEDULED,
+            score=90,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")
@@ -460,8 +575,14 @@ class TestOfferActions:
     async def test_offer_on_completed_and_guard(self, db, db_path):
         """o on INTERVIEW_COMPLETED opens modal → OFFER_RECEIVED;
         o on INTERVIEW_SCHEDULED is no-op."""
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.INTERVIEW_COMPLETED, score=88)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.INTERVIEW_COMPLETED,
+            score=88,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")  # Applied
@@ -470,30 +591,48 @@ class TestOfferActions:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "note-input":
                     w.value = "120k base + stock"
             await pilot.click("#save-btn")
             await pilot.pause()
-            assert get_application(db, "app-a").status == ApplicationStatus.OFFER_RECEIVED
+            assert (
+                get_application(db, "app-a").status == ApplicationStatus.OFFER_RECEIVED
+            )
             ix = list_interactions(db, "app-a")
             assert "Offer received" in ix[0].content
 
     async def test_offer_guard_on_wrong_status(self, db, db_path):
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.INTERVIEW_SCHEDULED, score=90)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.INTERVIEW_SCHEDULED,
+            score=90,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")
             await pilot.press("right")
             await pilot.press("o")
             await pilot.pause()
-            assert get_application(db, "app-a").status == ApplicationStatus.INTERVIEW_SCHEDULED
+            assert (
+                get_application(db, "app-a").status
+                == ApplicationStatus.INTERVIEW_SCHEDULED
+            )
 
     async def test_accept_and_reject_offer(self, db, db_path):
         """a accepts; x rejects from Offers tab."""
-        _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co",
-                  status=ApplicationStatus.OFFER_RECEIVED, score=95)
+        _seed_app(
+            db,
+            app_id="app-a",
+            opp_id="opp-a",
+            company="Co",
+            status=ApplicationStatus.OFFER_RECEIVED,
+            score=95,
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             for _ in range(3):
@@ -510,12 +649,17 @@ class TestOfferActions:
 class TestTimeline:
     async def test_timeline_shows_interactions(self, db, db_path):
         _seed_app(db, app_id="app-a", opp_id="opp-a", company="Co")
-        save_interaction(db, Interaction(
-            application_id="app-a", type=InteractionType.NOTE,
-            direction="internal", channel="console",
-            content="Called recruiter, positive vibes",
-            created_at=datetime.now(),
-        ))
+        save_interaction(
+            db,
+            Interaction(
+                application_id="app-a",
+                type=InteractionType.NOTE,
+                direction="internal",
+                channel="console",
+                content="Called recruiter, positive vibes",
+                created_at=datetime.now(),
+            ),
+        )
         app = WorkConsoleApp(db_path=db_path)
         async with app.run_test() as pilot:
             await pilot.press("right")  # Applied
@@ -530,6 +674,182 @@ class TestTimeline:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Below-threshold toggle and actions
+# ---------------------------------------------------------------------------
+
+
+class TestBelowThreshold:
+    """Tests for the b toggle and BT-specific queue actions."""
+
+    async def test_bt_hidden_by_default(self, db, db_path, monkeypatch):
+        """BELOW_THRESHOLD apps are hidden from Queue by default."""
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        _seed_app(
+            db,
+            app_id="app-sc",
+            opp_id="opp-sc",
+            company="SCCo",
+            status=ApplicationStatus.SCORED,
+            score=50,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            # Only SCORED app visible; BT is hidden
+            ol = app.query_one("#list-queue")
+            assert ol.option_count == 1
+            assert "SCCo" in str(ol.get_option_at_index(0).prompt)
+
+    async def test_bt_toggle_shows_bt_apps(self, db, db_path, monkeypatch):
+        """Pressing b shows BELOW_THRESHOLD apps in Queue."""
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        _seed_app(
+            db,
+            app_id="app-sc",
+            opp_id="opp-sc",
+            company="SCCo",
+            status=ApplicationStatus.SCORED,
+            score=50,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            await pilot.press("b")
+            ol = app.query_one("#list-queue")
+            assert ol.option_count == 2
+            # BT app should have [BT] prefix
+            labels = [str(ol.get_option_at_index(i).prompt) for i in range(2)]
+            bt_labels = [l for l in labels if "[BT]" in l]
+            assert len(bt_labels) == 1
+            assert "BTCo" in bt_labels[0]
+
+    async def test_bt_toggle_tab_label(self, db, db_path, monkeypatch):
+        """Tab label shows +BT indicator when toggle is active."""
+        from textual.widgets import TabbedContent
+
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            tc = app.query_one(TabbedContent)
+            label_before = str(tc.get_tab("tab-queue").label)
+            assert "+BT" not in label_before
+
+            await pilot.press("b")
+            label_after = str(tc.get_tab("tab-queue").label)
+            assert "+BT" in label_after
+
+    async def test_bt_detail_shows_status(self, db, db_path, monkeypatch):
+        """Detail pane shows 'BELOW THRESHOLD' for BT items."""
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            await pilot.press("b")
+            text = str(app.query_one("#detail-queue").content)
+            assert "BELOW THRESHOLD" in text
+
+    async def test_done_on_bt_promotes_then_completes(self, db, db_path, monkeypatch):
+        """d on a BELOW_THRESHOLD app promotes to SCORED, then completes to OUTREACH_SENT."""
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            await pilot.press("b")  # show BT
+            await pilot.press("d")
+            loaded = get_application(db, "app-bt")
+            assert loaded.status == ApplicationStatus.OUTREACH_SENT
+
+    async def test_pass_on_bt_item(self, db, db_path, monkeypatch):
+        """p on a BELOW_THRESHOLD app transitions directly to PASSED."""
+        monkeypatch.setattr("emplaiyed.llm.config.SCORE_THRESHOLD", 30)
+        _seed_app(
+            db,
+            app_id="app-bt",
+            opp_id="opp-bt",
+            company="BTCo",
+            status=ApplicationStatus.BELOW_THRESHOLD,
+            score=20,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test() as pilot:
+            await pilot.press("b")  # show BT
+            await pilot.press("p")
+            loaded = get_application(db, "app-bt")
+            assert loaded.status == ApplicationStatus.PASSED
+
+
+class TestDeleteApplication:
+    async def test_delete_from_queue(self, db, db_path):
+        """z on Queue immediately deletes the selected app."""
+        _seed_queue(db, count=2)
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test(size=(80, 50)) as pilot:
+            await pilot.press("z")
+            await pilot.pause()
+            remaining = db.execute(
+                "SELECT COUNT(*) as cnt FROM applications"
+            ).fetchone()
+            assert remaining["cnt"] == 1
+
+    async def test_delete_from_closed_tab(self, db, db_path):
+        """z works on the Closed tab and removes orphaned opportunity."""
+        _seed_app(
+            db,
+            app_id="app-closed",
+            opp_id="opp-closed",
+            company="ClosedCo",
+            status=ApplicationStatus.PASSED,
+        )
+        app = WorkConsoleApp(db_path=db_path)
+        async with app.run_test(size=(80, 50)) as pilot:
+            for _ in range(4):
+                await pilot.press("right")
+            assert app._active_tab == "Closed"
+            await pilot.press("z")
+            await pilot.pause()
+            assert get_application(db, "app-closed") is None
+            from emplaiyed.core.database import get_opportunity
+
+            assert get_opportunity(db, "opp-closed") is None
+
+
 class TestEndToEnd:
     async def test_queue_to_closed(self, db, db_path):
         """Walk an application: Queue → Applied → Active → Closed → Funnel."""
@@ -538,7 +858,9 @@ class TestEndToEnd:
         async with app.run_test(size=(80, 50)) as pilot:
             # Queue: mark done → OUTREACH_SENT
             await pilot.press("d")
-            assert get_application(db, "app-0").status == ApplicationStatus.OUTREACH_SENT
+            assert (
+                get_application(db, "app-0").status == ApplicationStatus.OUTREACH_SENT
+            )
 
             # Applied: response → RESPONSE_RECEIVED
             await pilot.press("right")
@@ -547,12 +869,16 @@ class TestEndToEnd:
             await pilot.pause()
             await pilot.pause()
             from textual.widgets import Input
+
             for w in app.screen.query(Input):
                 if w.id == "response-input":
                     w.value = "Got a reply"
             await pilot.click("#save-btn")
             await pilot.pause()
-            assert get_application(db, "app-0").status == ApplicationStatus.RESPONSE_RECEIVED
+            assert (
+                get_application(db, "app-0").status
+                == ApplicationStatus.RESPONSE_RECEIVED
+            )
 
             # Active: reject
             await pilot.press("right")

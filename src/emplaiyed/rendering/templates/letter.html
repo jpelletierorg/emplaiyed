@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cover Letter</title>
+<style>
+  @page {
+    size: Letter;
+    margin: 1.5cm 2cm;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.6;
+    color: #2d3748;
+  }
+
+  /* ── Header band (matches CV) ── */
+  .header {
+    background: #1a365d;
+    color: #fff;
+    padding: 20pt 24pt 16pt;
+    margin: -1.5cm -2cm 0 -2cm;
+    width: calc(100% + 4cm);
+    margin-bottom: 28pt;
+  }
+  .header h1 {
+    font-size: 22pt;
+    font-weight: 700;
+    letter-spacing: 0.3pt;
+    margin-bottom: 6pt;
+  }
+  .header .contact {
+    font-size: 8.5pt;
+    color: #e2e8f0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4pt 14pt;
+  }
+  .header .contact a {
+    color: #bee3f8;
+    text-decoration: none;
+  }
+
+  /* ── Letter body ── */
+  .greeting {
+    font-weight: 600;
+    margin-bottom: 14pt;
+    color: #1a365d;
+  }
+  .body {
+    margin-bottom: 24pt;
+    white-space: pre-wrap;
+    line-height: 1.7;
+  }
+  .closing {
+    margin-bottom: 6pt;
+  }
+  .signature {
+    font-weight: 700;
+    color: #1a365d;
+  }
+</style>
+</head>
+<body>
+
+{% if profile %}
+<div class="header">
+  <h1>{{ profile.name }}</h1>
+  <div class="contact">
+    <span>{{ profile.email }}</span>
+    {% if profile.phone %}<span>{{ profile.phone }}</span>{% endif %}
+    {% if profile.address and profile.address.city %}<span>{{ profile.address.city }}{% if profile.address.province_state %}, {{ profile.address.province_state }}{% endif %}</span>{% endif %}
+    {% if profile.linkedin %}<span><a href="{{ profile.linkedin }}">LinkedIn</a></span>{% endif %}
+    {% if profile.github %}<span><a href="{{ profile.github }}">GitHub</a></span>{% endif %}
+  </div>
+</div>
+{% endif %}
+
+{% if today_date %}
+<div style="margin-bottom: 14pt; font-size: 9.5pt; color: #718096;">
+  {{ today_date }}
+</div>
+{% endif %}
+
+<div class="greeting">{{ letter.greeting }}</div>
+<div class="body">{{ letter.hook }}
+
+{{ letter.proof }}
+
+{{ letter.close }}</div>
+<div class="closing">{{ letter.closing }}</div>
+<div class="signature">{{ letter.signature_name }}</div>
+
+</body>
+</html>

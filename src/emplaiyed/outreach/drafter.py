@@ -89,12 +89,23 @@ async def draft_outreach(
         company=opportunity.company,
         title=opportunity.title,
         location=opportunity.location or "Not specified",
-        description=(opportunity.description[:1000] if opportunity.description else "No description"),
+        description=(
+            opportunity.description[:1000]
+            if opportunity.description
+            else "No description"
+        ),
     )
 
-    logger.debug("Drafting outreach for %s at %s", opportunity.title, opportunity.company)
+    from emplaiyed.llm.config import OUTREACH_MODEL
+
+    logger.debug(
+        "Drafting outreach for %s at %s", opportunity.title, opportunity.company
+    )
     return await complete_structured(
-        prompt, output_type=OutreachDraft, _model_override=_model_override
+        prompt,
+        output_type=OutreachDraft,
+        model=OUTREACH_MODEL,
+        _model_override=_model_override,
     )
 
 
@@ -140,17 +151,11 @@ def enqueue_outreach(
     """
     draft_text = f"Subject: {draft.subject}\n\n{draft.body}"
 
+    tagged_email = f"moi+{opportunity.short_id}@jpelletier.org"
     instructions = (
-        f"## Send outreach to {opportunity.company} — {opportunity.title}\n\n"
-        f"**Company:** {opportunity.company}\n"
-        f"**Role:** {opportunity.title}\n"
-        f"**Location:** {opportunity.location or 'Not specified'}\n\n"
-        f"### What to do\n"
-        f"1. Copy the email draft below\n"
-        f"2. Open your email client and compose a new message\n"
-        f"3. Send to the hiring contact (check job posting for email)\n"
-        f"4. Run: `emplaiyed work done <id>`\n\n"
-        f"### Draft email\n\n{draft_text}"
+        f"## {opportunity.company} — {opportunity.title}\n\n"
+        f"**From:** `{tagged_email}`\n\n"
+        f"### Draft\n\n{draft_text}"
     )
 
     return create_work_item(

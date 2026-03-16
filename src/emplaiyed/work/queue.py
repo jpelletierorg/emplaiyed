@@ -149,4 +149,6 @@ def _interaction_type_for(work_type: WorkType) -> InteractionType:
     """Map work type to interaction type."""
     if work_type == WorkType.FOLLOW_UP:
         return InteractionType.FOLLOW_UP
+    if work_type == WorkType.REVIEW_RESPONSE:
+        return InteractionType.EMAIL_RECEIVED
     return InteractionType.EMAIL_SENT

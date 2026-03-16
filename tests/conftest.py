@@ -2,6 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import sys
+
+# WeasyPrint requires system libraries (pango, glib) installed via Homebrew.
+# On macOS, ensure the Homebrew lib path is discoverable by dlopen.
+if sys.platform == "darwin":
+    _brew_lib = "/opt/homebrew/lib"
+    _current = os.environ.get("DYLD_FALLBACK_LIBRARY_PATH", "")
+    if _brew_lib not in _current:
+        os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = (
+            f"{_brew_lib}:{_current}" if _current else _brew_lib
+        )
+
 import sqlite3
 from datetime import datetime
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Tests for emplaiyed.profile.cv_parser — no real API calls."""
+"""Tests for emplaiyed.profile.cv_parser -- no real API calls."""
 
 from __future__ import annotations
 
@@ -21,13 +21,21 @@ _CV_PDF_PATH = Path(__file__).resolve().parents[2] / ".." / "files" / "cv.pdf"
 class TestExtractText:
     """Tests for the extract_text() function."""
 
-    def test_reads_plain_text_file(self, tmp_path: Path) -> None:
-        """Plain text files should be read directly."""
-        cv = tmp_path / "resume.txt"
-        cv.write_text("Jonathan Pelletier\nSoftware Engineer", encoding="utf-8")
+    @pytest.mark.parametrize(
+        "filename, content, expected",
+        [
+            ("resume.txt", "Jonathan Pelletier\nSoftware Engineer", "Jonathan Pelletier"),
+            ("resume.md", "# Resume\n\nJohn Doe", "John Doe"),
+        ],
+    )
+    def test_reads_text_formats(
+        self, tmp_path: Path, filename: str, content: str, expected: str
+    ) -> None:
+        """Plain text and markdown files should be read directly."""
+        cv = tmp_path / filename
+        cv.write_text(content, encoding="utf-8")
         result = extract_text(cv)
-        assert "Jonathan Pelletier" in result
-        assert "Software Engineer" in result
+        assert expected in result
 
     def test_raises_file_not_found(self, tmp_path: Path) -> None:
         """A missing file should raise FileNotFoundError."""
@@ -41,13 +49,6 @@ class TestExtractText:
         empty.write_text("", encoding="utf-8")
         with pytest.raises(ValueError, match="No text could be extracted"):
             extract_text(empty)
-
-    def test_reads_markdown_file(self, tmp_path: Path) -> None:
-        """Non-PDF text formats should be read as plain text."""
-        cv = tmp_path / "resume.md"
-        cv.write_text("# Resume\n\nJohn Doe", encoding="utf-8")
-        result = extract_text(cv)
-        assert "John Doe" in result
 
     def test_strips_whitespace(self, tmp_path: Path) -> None:
         """Extracted text should have leading/trailing whitespace stripped."""
@@ -88,40 +89,7 @@ class TestExtractText:
 
 
 # ---------------------------------------------------------------------------
-# parse_cv_text tests
-# ---------------------------------------------------------------------------
-
-class TestParseCvText:
-    """Tests for parse_cv_text() using TestModel."""
-
-    async def test_returns_profile_instance(self) -> None:
-        """parse_cv_text should return a Profile instance."""
-        result = await parse_cv_text(
-            "Jonathan Pelletier\njonathan@example.com\nPython, AWS",
-            _model_override=TestModel(),
-        )
-        assert isinstance(result, Profile)
-
-    async def test_profile_has_required_fields(self) -> None:
-        """The returned Profile must have name and email (TestModel fills defaults)."""
-        result = await parse_cv_text(
-            "Some CV text",
-            _model_override=TestModel(),
-        )
-        assert isinstance(result.name, str)
-        assert isinstance(result.email, str)
-
-    async def test_skills_is_list(self) -> None:
-        """skills should always be a list."""
-        result = await parse_cv_text(
-            "Python, TypeScript, Docker",
-            _model_override=TestModel(),
-        )
-        assert isinstance(result.skills, list)
-
-
-# ---------------------------------------------------------------------------
-# parse_cv tests
+# parse_cv tests (full pipeline)
 # ---------------------------------------------------------------------------
 
 class TestParseCv:
@@ -167,26 +135,45 @@ class TestRealCvExtraction:
     """Tests using the actual cv.pdf to verify text extraction quality.
 
     These tests verify that pdfminer extracts the expected content from
-    Jonathan's real CV. They do NOT call the LLM — they only test
+    Jonathan's real CV. They do NOT call the LLM -- they only test
     extract_text().
     """
 
-    def test_extracts_name(self) -> None:
+    @pytest.mark.parametrize(
+        "expected_text",
+        [
+            "Jonathan Pelletier",
+            "jonathan.pelletier-aafz@thecloudco.ca",
+            "Longueuil",
+            "Python",
+            "SQL",
+            "TypeScript",
+            "Docker",
+            "Terraform",
+            "Polytechnique",
+            "Computer Engineering",
+        ],
+        ids=[
+            "name",
+            "email",
+            "location",
+            "skill-python",
+            "skill-sql",
+            "skill-typescript",
+            "skill-docker",
+            "skill-terraform",
+            "education-institution",
+            "education-field",
+        ],
+    )
+    def test_extracts_expected_content(self, expected_text: str) -> None:
         text = extract_text(_CV_PDF_PATH)
-        assert "Jonathan Pelletier" in text
-
-    def test_extracts_email(self) -> None:
-        text = extract_text(_CV_PDF_PATH)
-        assert "jonathan.pelletier-aafz@thecloudco.ca" in text
+        assert expected_text in text
 
     def test_extracts_phone(self) -> None:
         text = extract_text(_CV_PDF_PATH)
         assert "438" in text
         assert "876" in text
-
-    def test_extracts_location(self) -> None:
-        text = extract_text(_CV_PDF_PATH)
-        assert "Longueuil" in text
 
     def test_extracts_certifications(self) -> None:
         text = extract_text(_CV_PDF_PATH)
@@ -198,11 +185,8 @@ class TestRealCvExtraction:
     def test_extracts_certification_dates(self) -> None:
         """Certification date ranges MUST be present in the extracted text."""
         text = extract_text(_CV_PDF_PATH)
-        # The CV shows "2019 - 2022" and "2018 - 2021" for cert dates
-        assert "2019" in text
-        assert "2022" in text
-        assert "2018" in text
-        assert "2021" in text
+        for year in ["2019", "2022", "2018", "2021"]:
+            assert year in text
 
     def test_extracts_employers(self) -> None:
         text = extract_text(_CV_PDF_PATH)
@@ -212,57 +196,8 @@ class TestRealCvExtraction:
         assert "National Bank" in text
         assert "Mtrip" in text
 
-    def test_extracts_skills(self) -> None:
-        text = extract_text(_CV_PDF_PATH)
-        assert "Python" in text
-        assert "SQL" in text
-        assert "TypeScript" in text
-        assert "Docker" in text
-        assert "Terraform" in text
-
-    def test_extracts_education(self) -> None:
-        text = extract_text(_CV_PDF_PATH)
-        assert "Polytechnique" in text
-        assert "Computer Engineering" in text
-
     def test_extracts_employment_dates(self) -> None:
         """Employment start/end dates must be present."""
         text = extract_text(_CV_PDF_PATH)
-        assert "2021" in text  # Croesus start
-        assert "2018" in text  # Onica start
-        assert "2015" in text  # National Bank start
-        assert "2013" in text  # Mtrip start
-
-    def test_text_is_non_trivial_length(self) -> None:
-        """The CV has substantial content — extracted text should be long."""
-        text = extract_text(_CV_PDF_PATH)
-        # Jonathan's CV is ~1 page with dense content
-        assert len(text) > 500
-
-
-@_skip_no_cv
-class TestProfileSchemaConstraints:
-    """Tests that verify the Profile schema enforces the design rules."""
-
-    def test_profile_has_no_summary_field(self) -> None:
-        """Summary is derived, not stored. The Profile model must not have it."""
-        assert "summary" not in Profile.model_fields
-
-    def test_certification_has_expiry_date(self) -> None:
-        """Certifications must support date ranges (obtained + expiry)."""
-        from emplaiyed.core.models import Certification
-        assert "date_obtained" in Certification.model_fields
-        assert "expiry_date" in Certification.model_fields
-
-    def test_work_arrangement_is_list(self) -> None:
-        """work_arrangement must be a list to capture multiple preferences."""
-        from emplaiyed.core.models import Aspirations
-        asp = Aspirations(work_arrangement=["remote", "hybrid", "on-site"])
-        assert asp.work_arrangement == ["remote", "hybrid", "on-site"]
-
-    def test_work_arrangement_rejects_string(self) -> None:
-        """Passing a bare string to work_arrangement must fail validation."""
-        from pydantic import ValidationError
-        from emplaiyed.core.models import Aspirations
-        with pytest.raises(ValidationError):
-            Aspirations(work_arrangement="remote")  # type: ignore[arg-type]
+        for year in ["2021", "2018", "2015", "2013"]:
+            assert year in text

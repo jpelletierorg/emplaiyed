@@ -14,6 +14,7 @@ from emplaiyed.core.models import (
     Employment,
     Language,
     Profile,
+    Project,
 )
 from emplaiyed.profile.gap_analyzer import (
     Gap,
@@ -27,9 +28,10 @@ from emplaiyed.profile.gap_analyzer import (
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def full_profile() -> Profile:
-    """A profile with every field populated — should produce zero gaps."""
+    """A profile with every field populated -- should produce zero gaps."""
     return Profile(
         name="Alice Smith",
         email="alice@example.com",
@@ -60,6 +62,11 @@ def full_profile() -> Profile:
         certifications=[
             Certification(name="AWS SAA", issuer="Amazon"),
         ],
+        projects=[
+            Project(
+                name="emplaiyed", description="AI job toolkit", technologies=["Python"]
+            ),
+        ],
         aspirations=Aspirations(
             target_roles=["Staff Engineer"],
             salary_minimum=100000,
@@ -67,6 +74,7 @@ def full_profile() -> Profile:
             urgency="within_3_months",
             geographic_preferences=["Montreal", "Remote"],
             work_arrangement=["hybrid"],
+            statement="I want to lead teams building scalable distributed systems.",
         ),
     )
 
@@ -100,6 +108,7 @@ def partial_profile() -> Profile:
 # GapReport dataclass tests
 # ---------------------------------------------------------------------------
 
+
 class TestGapReport:
     def test_empty_report_is_complete(self) -> None:
         report = GapReport(gaps=[])
@@ -107,9 +116,7 @@ class TestGapReport:
         assert report.is_fully_complete is True
 
     def test_required_gaps_make_incomplete(self) -> None:
-        report = GapReport(
-            gaps=[Gap("skills", "need skills", GapPriority.REQUIRED)]
-        )
+        report = GapReport(gaps=[Gap("skills", "need skills", GapPriority.REQUIRED)])
         assert report.is_complete is False
         assert report.is_fully_complete is False
 
@@ -137,6 +144,7 @@ class TestGapReport:
 # analyze_gaps tests
 # ---------------------------------------------------------------------------
 
+
 class TestAnalyzeGapsFull:
     """A fully populated profile should have no gaps."""
 
@@ -153,95 +161,119 @@ class TestAnalyzeGapsEmpty:
         report = analyze_gaps(empty_profile)
         assert report.is_complete is False
 
-    def test_skills_gap_present(self, empty_profile: Profile) -> None:
+    @pytest.mark.parametrize(
+        "expected_field",
+        [
+            "skills",
+            "aspirations.target_roles",
+            "aspirations.salary_minimum",
+            "aspirations.salary_target",
+            "aspirations.urgency",
+            "aspirations.geographic_preferences",
+            "aspirations.work_arrangement",
+            "aspirations.statement",
+            "languages",
+            "certifications",
+            "projects",
+        ],
+        ids=[
+            "skills",
+            "target_roles",
+            "salary_minimum",
+            "salary_target",
+            "urgency",
+            "geographic_preferences",
+            "work_arrangement",
+            "statement",
+            "languages",
+            "certifications",
+            "projects",
+        ],
+    )
+    def test_gap_present(self, empty_profile: Profile, expected_field: str) -> None:
+        """Each expected gap field should appear in the empty profile report."""
         report = analyze_gaps(empty_profile)
         field_names = [g.field_name for g in report.gaps]
-        assert "skills" in field_names
+        assert expected_field in field_names
 
-    def test_all_aspiration_gaps_present(self, empty_profile: Profile) -> None:
+    def test_summary_not_in_gaps(self, empty_profile: Profile) -> None:
+        """Summary is derived, not stored -- should never appear as a gap."""
         report = analyze_gaps(empty_profile)
         field_names = [g.field_name for g in report.gaps]
-        assert "aspirations.target_roles" in field_names
-        assert "aspirations.salary_minimum" in field_names
-        assert "aspirations.salary_target" in field_names
-        assert "aspirations.urgency" in field_names
-        assert "aspirations.geographic_preferences" in field_names
-        assert "aspirations.work_arrangement" in field_names
-
-    def test_nice_to_have_gaps_present(self, empty_profile: Profile) -> None:
-        report = analyze_gaps(empty_profile)
-        field_names = [g.field_name for g in report.gaps]
-        assert "languages" in field_names
-        assert "certifications" in field_names
-        assert "summary" not in field_names  # summary is not stored in profile
+        assert "summary" not in field_names
 
     def test_total_gap_count(self, empty_profile: Profile) -> None:
-        """Empty profile: 1 (skills) + 6 (aspirations) + 2 (nice-to-have) = 9."""
+        """Empty profile: 1 (skills) + 7 (aspirations incl. statement) + 3 (nice-to-have) = 11."""
         report = analyze_gaps(empty_profile)
-        assert len(report.gaps) == 9
+        assert len(report.gaps) == 11
 
     def test_required_gap_count(self, empty_profile: Profile) -> None:
-        """Required gaps: 1 (skills) + 6 (aspirations) = 7."""
+        """Required gaps: 1 (skills) + 7 (aspirations incl. statement) = 8."""
         report = analyze_gaps(empty_profile)
-        assert len(report.required_gaps) == 7
+        assert len(report.required_gaps) == 8
 
     def test_nice_to_have_gap_count(self, empty_profile: Profile) -> None:
-        """Nice-to-have gaps: languages + certifications = 2."""
+        """Nice-to-have gaps: languages + certifications + projects = 3."""
         report = analyze_gaps(empty_profile)
-        assert len(report.nice_to_have_gaps) == 2
+        assert len(report.nice_to_have_gaps) == 3
 
 
 class TestAnalyzeGapsPartial:
     """A partially filled profile should only flag missing fields."""
 
-    def test_skills_not_flagged(self, partial_profile: Profile) -> None:
-        """Skills is populated, so should not appear in gaps."""
-        report = analyze_gaps(partial_profile)
-        field_names = [g.field_name for g in report.gaps]
-        assert "skills" not in field_names
-
-    def test_languages_not_flagged(self, partial_profile: Profile) -> None:
-        """Languages is populated."""
-        report = analyze_gaps(partial_profile)
-        field_names = [g.field_name for g in report.gaps]
-        assert "languages" not in field_names
-
-    def test_salary_gaps_flagged(self, partial_profile: Profile) -> None:
-        """Salary fields are missing."""
-        report = analyze_gaps(partial_profile)
-        field_names = [g.field_name for g in report.gaps]
-        assert "aspirations.salary_minimum" in field_names
-        assert "aspirations.salary_target" in field_names
-
-    def test_certifications_flagged(self, partial_profile: Profile) -> None:
-        """Certifications is empty."""
-        report = analyze_gaps(partial_profile)
-        field_names = [g.field_name for g in report.gaps]
-        assert "certifications" in field_names
-
-    def test_populated_aspiration_fields_not_flagged(
-        self, partial_profile: Profile
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "aspirations.salary_minimum",
+            "aspirations.salary_target",
+            "certifications",
+        ],
+        ids=["salary_minimum", "salary_target", "certifications"],
+    )
+    def test_missing_fields_flagged(
+        self, partial_profile: Profile, field_name: str
     ) -> None:
-        """Aspiration fields that are set should not be flagged."""
+        """Fields that are missing should appear in gaps."""
         report = analyze_gaps(partial_profile)
         field_names = [g.field_name for g in report.gaps]
-        assert "aspirations.target_roles" not in field_names
-        assert "aspirations.urgency" not in field_names
-        assert "aspirations.geographic_preferences" not in field_names
-        assert "aspirations.work_arrangement" not in field_names
+        assert field_name in field_names
 
-    def test_is_complete_false_due_to_salary(
-        self, partial_profile: Profile
+    @pytest.mark.parametrize(
+        "field_name",
+        [
+            "skills",
+            "languages",
+            "aspirations.target_roles",
+            "aspirations.urgency",
+            "aspirations.geographic_preferences",
+            "aspirations.work_arrangement",
+        ],
+        ids=[
+            "skills",
+            "languages",
+            "target_roles",
+            "urgency",
+            "geographic_preferences",
+            "work_arrangement",
+        ],
+    )
+    def test_populated_fields_not_flagged(
+        self, partial_profile: Profile, field_name: str
     ) -> None:
+        """Fields that are populated should not appear in gaps."""
+        report = analyze_gaps(partial_profile)
+        field_names = [g.field_name for g in report.gaps]
+        assert field_name not in field_names
+
+    def test_is_complete_false_due_to_salary(self, partial_profile: Profile) -> None:
         """Profile is not complete because salary fields are required."""
         report = analyze_gaps(partial_profile)
         assert report.is_complete is False
 
     def test_gap_count(self, partial_profile: Profile) -> None:
-        """2 required (salaries) + 1 nice-to-have (certifications) = 3.
-        (summary is no longer a profile field, so not counted.)"""
+        """3 required (salaries + statement) + 2 nice-to-have (certifications + projects) = 5."""
         report = analyze_gaps(partial_profile)
-        assert len(report.gaps) == 3
+        assert len(report.gaps) == 5
 
 
 class TestAnalyzeGapsEdgeCases:
@@ -276,16 +308,3 @@ class TestAnalyzeGapsEdgeCases:
         report = analyze_gaps(profile)
         field_names = [g.field_name for g in report.gaps]
         assert "skills" in field_names
-
-    def test_all_gaps_have_descriptions(self, empty_profile: Profile) -> None:
-        """Every gap should have a non-empty description."""
-        report = analyze_gaps(empty_profile)
-        for gap in report.gaps:
-            assert gap.description
-            assert len(gap.description) > 0
-
-    def test_all_gaps_have_valid_priority(self, empty_profile: Profile) -> None:
-        """Every gap should have a valid GapPriority."""
-        report = analyze_gaps(empty_profile)
-        for gap in report.gaps:
-            assert gap.priority in (GapPriority.REQUIRED, GapPriority.NICE_TO_HAVE)

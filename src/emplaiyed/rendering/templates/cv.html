@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>{{ cv.name }} — CV</title>
+<style>
+  @page {
+    size: Letter;
+    margin: 1.5cm 2cm;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9.5pt;
+    line-height: 1.45;
+    color: #2d3748;
+  }
+
+  /* ── Header band ── */
+  .header {
+    background: #1a365d;
+    color: #fff;
+    padding: 20pt 24pt 16pt;
+    margin: -1.5cm -2cm 0 -2cm;
+    width: calc(100% + 4cm);
+  }
+  .header h1 {
+    font-size: 22pt;
+    font-weight: 700;
+    letter-spacing: 0.3pt;
+    margin-bottom: 2pt;
+  }
+  .header .professional-title {
+    font-size: 11pt;
+    font-weight: 400;
+    color: #bee3f8;
+    margin-bottom: 8pt;
+  }
+  .header .contact {
+    font-size: 8.5pt;
+    color: #e2e8f0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4pt 14pt;
+  }
+  .header .contact a {
+    color: #bee3f8;
+    text-decoration: none;
+  }
+
+  /* ── Section headings ── */
+  h2 {
+    font-size: 10.5pt;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.8pt;
+    color: #1a365d;
+    border-bottom: 1.5pt solid #2b6cb0;
+    padding-bottom: 3pt;
+    margin-top: 14pt;
+    margin-bottom: 8pt;
+  }
+
+  /* ── Summary ── */
+  .summary {
+    margin-top: 14pt;
+    margin-bottom: 4pt;
+    font-size: 9.5pt;
+    line-height: 1.55;
+    color: #4a5568;
+  }
+
+  /* ── Skills pills ── */
+  .skill-group {
+    margin-bottom: 6pt;
+    line-height: 1.8;
+  }
+  .skill-group-name {
+    font-weight: 700;
+    font-size: 9pt;
+    color: #2d3748;
+    margin-right: 4pt;
+  }
+  .skill-pill {
+    display: inline-block;
+    background: #ebf4ff;
+    color: #2b6cb0;
+    font-size: 8pt;
+    font-weight: 600;
+    padding: 1.5pt 7pt;
+    border-radius: 3pt;
+    margin: 1pt 2pt;
+  }
+
+  /* ── Experience ── */
+  .exp-entry {
+    margin-bottom: 10pt;
+  }
+  .exp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 2pt;
+  }
+  .exp-title {
+    font-weight: 700;
+    font-size: 10pt;
+    color: #1a365d;
+  }
+  .exp-company {
+    font-size: 10pt;
+    color: #4a5568;
+  }
+  .exp-dates {
+    font-size: 8.5pt;
+    color: #718096;
+    white-space: nowrap;
+    font-style: italic;
+  }
+  .exp-description {
+    font-size: 9pt;
+    color: #718096;
+    margin-bottom: 2pt;
+    font-style: italic;
+  }
+  .exp-highlights {
+    list-style-type: none;
+    padding-left: 10pt;
+    margin-bottom: 2pt;
+  }
+  .exp-highlights li {
+    font-size: 9pt;
+    margin-bottom: 2pt;
+    position: relative;
+    padding-left: 8pt;
+  }
+  .exp-highlights li::before {
+    content: "•";
+    position: absolute;
+    left: 0;
+    color: #2b6cb0;
+    font-size: 8pt;
+  }
+
+  /* ── Education & Certifications ── */
+  .edu-item, .cert-item {
+    margin-bottom: 3pt;
+  }
+  .edu-name, .cert-name {
+    font-weight: 700;
+    font-size: 9pt;
+  }
+  .edu-details, .cert-details {
+    font-size: 8.5pt;
+    color: #718096;
+  }
+
+  /* ── Languages ── */
+  .languages {
+    font-size: 9pt;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>{{ cv.name }}</h1>
+  <div class="professional-title">{{ cv.professional_title }}</div>
+  <div class="contact">
+    <span>{{ cv.email }}</span>
+    {% if cv.phone %}<span>{{ cv.phone }}</span>{% endif %}
+    {% if cv.location %}<span>{{ cv.location }}</span>{% endif %}
+    {% if cv.linkedin %}<span><a href="{{ cv.linkedin }}">LinkedIn</a></span>{% endif %}
+    {% if cv.github %}<span><a href="{{ cv.github }}">GitHub</a></span>{% endif %}
+  </div>
+</div>
+
+{% if cv.summary %}
+<div class="summary">{{ cv.summary }}</div>
+{% endif %}
+
+{% if cv.skill_categories %}
+<h2>Skills</h2>
+{% for cat in cv.skill_categories %}
+<div class="skill-group">
+  <span class="skill-group-name">{{ cat.category }}:</span>
+  {% for skill in cat.skills %}
+  <span class="skill-pill">{{ skill }}</span>
+  {% endfor %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if cv.experience %}
+<h2>Experience</h2>
+{% for exp in cv.experience %}
+<div class="exp-entry">
+  <div class="exp-header">
+    <div>
+      <span class="exp-title">{{ exp.title }}</span>
+      <span class="exp-company"> — {{ exp.company }}</span>
+    </div>
+    {% if exp.start_date or exp.end_date %}
+    <div class="exp-dates">{{ exp.start_date | format_date }} – {{ exp.end_date | format_date('Present') }}</div>
+    {% endif %}
+  </div>
+  {% if exp.description %}
+  <div class="exp-description">{{ exp.description }}</div>
+  {% endif %}
+  {% if exp.highlights %}
+  <ul class="exp-highlights">
+    {% for h in exp.highlights %}
+    <li>{{ h }}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if cv.projects %}
+<h2>Projects</h2>
+{% for proj in cv.projects %}
+<div class="exp-entry">
+  <div class="exp-header">
+    <div>
+      <span class="exp-title">{{ proj.name }}</span>
+      {% if proj.url %}<span class="exp-company"> — <a href="{{ proj.url }}" style="color: #2b6cb0; text-decoration: none;">{{ proj.url }}</a></span>{% endif %}
+    </div>
+  </div>
+  <div class="exp-description">{{ proj.description }}</div>
+  {% if proj.technologies %}
+  <div style="margin-top: 2pt;">
+    {% for tech in proj.technologies %}
+    <span class="skill-pill">{{ tech }}</span>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{% if cv.education %}
+<h2>Education</h2>
+{% for edu in cv.education %}
+<div class="edu-item">
+  <span class="edu-name">{{ edu.degree }} in {{ edu.field }}</span>
+  <span class="edu-details">
+    — {{ edu.institution }}
+    {% if edu.start_date or edu.end_date %}
+    ({{ edu.start_date | format_date }} – {{ edu.end_date | format_date('Present') }})
+    {% endif %}
+  </span>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if cv.certifications %}
+<h2>Certifications</h2>
+{% for cert in cv.certifications %}
+<div class="cert-item">
+  <span class="cert-name">{{ cert.name }}</span>
+  <span class="cert-details">— {{ cert.issuer }}{% if cert.date %} ({{ cert.date }}){% endif %}</span>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if cv.languages %}
+<h2>Languages</h2>
+<div class="languages">{{ cv.languages | join(' · ') }}</div>
+{% endif %}
+
+</body>
+</html>

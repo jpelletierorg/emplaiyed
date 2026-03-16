@@ -116,9 +116,12 @@ async def parse_cv_text(
 
     Useful when the text has already been extracted (e.g. pasted by user).
     """
+    from emplaiyed.llm.config import PROFILE_MODEL
+
     prompt = _CV_PARSE_PROMPT.format(cv_text=cv_text)
     return await complete_structured(
         prompt,
         output_type=Profile,
+        model=PROFILE_MODEL,
         _model_override=_model_override,
     )

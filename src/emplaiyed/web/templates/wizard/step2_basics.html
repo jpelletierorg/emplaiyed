@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Build Profile - Basics - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Build Your Profile</h1>
+    <p class="text-base-content/60">Let's start with the essentials.</p>
+    <ul class="steps steps-horizontal w-full mt-6">
+      <li class="step step-primary">Upload CV</li>
+      <li class="step step-primary">Basics</li>
+      <li class="step">Fill Gaps</li>
+      <li class="step">Done</li>
+    </ul>
+  </div>
+
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title mb-4">Basic Information</h2>
+
+      <form action="/api/profile/build/basics" method="post">
+        <div class="form-control w-full mb-4">
+          <label class="label"><span class="label-text">Full Name *</span></label>
+          <input type="text" name="name" required placeholder="Jonathan Pelletier"
+                 class="input input-bordered w-full" />
+        </div>
+
+        <div class="form-control w-full mb-4">
+          <label class="label"><span class="label-text">Email *</span></label>
+          <input type="email" name="email" required placeholder="you@example.com"
+                 class="input input-bordered w-full" />
+        </div>
+
+        <div class="card-actions justify-end mt-4">
+          <a href="/profile/build" class="btn btn-ghost">Back</a>
+          <button type="submit" class="btn btn-primary">
+            Next
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

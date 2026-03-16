@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Applied - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Applied</h1>
+    <span class="badge badge-lg badge-info">{{ applications|length }}</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Applications where outreach has been sent. Waiting for responses.
+  </p>
+
+  {% with show_score=false %}
+    {% include "partials/app_table.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

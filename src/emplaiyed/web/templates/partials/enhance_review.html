@@ -1,0 +1,32 @@
+{# Partial returned by the enhance API — shows rewritten highlights for review #}
+
+<div class="divider"></div>
+
+<div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div>
+    <p class="text-sm text-base-content/50 uppercase tracking-wide mb-2">Original</p>
+    <ul class="list-disc list-inside space-y-1 text-sm text-base-content/60">
+      {% for h in original %}
+      <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  <div>
+    <p class="text-sm text-success uppercase tracking-wide mb-2">Rewritten</p>
+    <ul class="list-disc list-inside space-y-1 text-sm text-success">
+      {% for h in rewritten %}
+      <li>{{ h }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</div>
+
+<form action="/api/profile/enhance/{{ employment_index }}/accept" method="post" class="mt-4">
+  {% for h in rewritten %}
+  <input type="hidden" name="highlight" value="{{ h }}" />
+  {% endfor %}
+  <div class="flex gap-2 justify-end">
+    <a href="/profile/enhance" class="btn btn-ghost btn-sm">Reject</a>
+    <button type="submit" class="btn btn-success btn-sm">Accept Changes</button>
+  </div>
+</form>

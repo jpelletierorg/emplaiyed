@@ -5,7 +5,10 @@ import sqlite3
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 
-from emplaiyed.core.database import list_opportunities, save_opportunity
+from emplaiyed.core.database import (
+    active_opportunity_keys,
+    save_opportunity,
+)
 from emplaiyed.core.models import Opportunity
 
 logger = logging.getLogger(__name__)
@@ -38,18 +41,13 @@ class BaseSource(ABC):
     ) -> list[Opportunity]:
         """Scrape and save to database. Handles deduplication.
 
-        Deduplication: skip opportunities where an existing row already has
-        the same (company, title, source) combination.
+        Deduplication: skip opportunities that already have any application,
+        regardless of status. Once seen, an opportunity never reappears.
         """
         opportunities = await self.scrape(query)
         logger.debug("Scraped %d opportunities from %s", len(opportunities), self.name)
-        existing = list_opportunities(db_conn, source=self.name)
 
-        # Build a set of (company_lower, title_lower, source) for fast lookup
-        existing_keys: set[tuple[str, str, str]] = {
-            (o.company.lower(), o.title.lower(), o.source.lower())
-            for o in existing
-        }
+        existing_keys = active_opportunity_keys(db_conn)
 
         saved: list[Opportunity] = []
         skipped = 0

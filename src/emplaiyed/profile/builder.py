@@ -42,6 +42,7 @@ from emplaiyed.profile.gap_analyzer import (
 # I/O protocol — allows injection of fake I/O for tests
 # ---------------------------------------------------------------------------
 
+
 class PromptFunc(Protocol):
     """Callable that displays a message and returns user input."""
 
@@ -57,6 +58,7 @@ class PrintFunc(Protocol):
 # ---------------------------------------------------------------------------
 # Profile merging
 # ---------------------------------------------------------------------------
+
 
 def _merge_profiles(base: Profile, update: Profile) -> Profile:
     """Merge *update* into *base*, preferring non-empty values from *update*.
@@ -132,6 +134,18 @@ _QUESTION_GROUPS: list[tuple[str, list[str]]] = [
             "certifications",
         ],
     ),
+    (
+        "career_statement",
+        [
+            "aspirations.statement",
+        ],
+    ),
+    (
+        "projects",
+        [
+            "projects",
+        ],
+    ),
 ]
 
 
@@ -158,20 +172,21 @@ _GROUP_PROMPTS: dict[str, str] = {
         "What kind of roles are you looking for, what's your preferred work "
         "arrangement (remote/hybrid/on-site), and where are you willing to work?"
     ),
-    "salary": (
-        "What's your salary expectation? (minimum and target)"
+    "salary": ("What's your salary expectation? (minimum and target)"),
+    "urgency": ("How urgent is your job search?"),
+    "skills": ("What are your key technical and professional skills?"),
+    "languages": ("What languages do you speak and at what proficiency level?"),
+    "certifications": ("Do you have any professional certifications?"),
+    "career_statement": (
+        "Describe your career goals in 1-2 sentences. "
+        "This is used in cover letters to explain what you're looking for. "
+        "Example: 'I want to apply my cloud architecture expertise to building "
+        "production AI systems that solve real business problems.'"
     ),
-    "urgency": (
-        "How urgent is your job search?"
-    ),
-    "skills": (
-        "What are your key technical and professional skills?"
-    ),
-    "languages": (
-        "What languages do you speak and at what proficiency level?"
-    ),
-    "certifications": (
-        "Do you have any professional certifications?"
+    "projects": (
+        "Do you have any personal or side projects worth highlighting? "
+        "For each, share the name, a short description, technologies used, "
+        "and a GitHub or demo link if available."
     ),
 }
 
@@ -215,9 +230,12 @@ async def _apply_corrections(
         profile_json=profile.model_dump_json(indent=2),
         user_input=user_input,
     )
+    from emplaiyed.llm.config import PROFILE_MODEL
+
     return await complete_structured(
         prompt,
         output_type=Profile,
+        model=PROFILE_MODEL,
         _model_override=_model_override,
     )
 
@@ -230,6 +248,8 @@ async def _parse_answer(
     _model_override: Model | None = None,
 ) -> Profile:
     """Use the LLM to parse a free-text answer into profile field updates."""
+    from emplaiyed.llm.config import PROFILE_MODEL
+
     prompt = _ANSWER_PARSE_PROMPT.format(
         fields=", ".join(fields),
         user_input=user_input,
@@ -238,6 +258,7 @@ async def _parse_answer(
     return await complete_structured(
         prompt,
         output_type=Profile,
+        model=PROFILE_MODEL,
         _model_override=_model_override,
     )
 
@@ -245,6 +266,7 @@ async def _parse_answer(
 # ---------------------------------------------------------------------------
 # Formatting helpers
 # ---------------------------------------------------------------------------
+
 
 def format_profile_summary(profile: Profile) -> str:
     """Build a human-readable summary of what was extracted."""
@@ -270,12 +292,16 @@ def format_profile_summary(profile: Profile) -> str:
         lines.append(f"  Skills:     {', '.join(profile.skills)}")
     if profile.education:
         for edu in profile.education:
-            lines.append(f"  Education:  {edu.degree} in {edu.field} @ {edu.institution}")
+            lines.append(
+                f"  Education:  {edu.degree} in {edu.field} @ {edu.institution}"
+            )
     if profile.employment_history:
         for emp in profile.employment_history:
             end = str(emp.end_date) if emp.end_date else "Present"
             start = str(emp.start_date) if emp.start_date else "?"
-            lines.append(f"  Employment: {emp.title} at {emp.company} ({start} - {end})")
+            lines.append(
+                f"  Employment: {emp.title} at {emp.company} ({start} - {end})"
+            )
     if profile.languages:
         lang_str = ", ".join(
             f"{l.language} ({l.proficiency})" for l in profile.languages
@@ -287,6 +313,7 @@ def format_profile_summary(profile: Profile) -> str:
 # ---------------------------------------------------------------------------
 # Main builder
 # ---------------------------------------------------------------------------
+
 
 async def build_profile(
     *,
@@ -394,7 +421,9 @@ async def build_profile(
         groups = _group_questions(gap_report)
 
         for group_name, fields in groups:
-            question = _GROUP_PROMPTS.get(group_name, f"Tell me about: {', '.join(fields)}")
+            question = _GROUP_PROMPTS.get(
+                group_name, f"Tell me about: {', '.join(fields)}"
+            )
             answer = prompt_fn(question)
 
             if answer.strip().lower() in ("skip", "none", ""):

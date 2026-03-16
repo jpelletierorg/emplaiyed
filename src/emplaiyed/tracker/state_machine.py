@@ -9,19 +9,31 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 
-from emplaiyed.core.database import get_application, save_application
-from emplaiyed.core.models import Application, ApplicationStatus
+from emplaiyed.core.database import (
+    get_application,
+    save_application,
+    save_status_transition,
+)
+from emplaiyed.core.models import Application, ApplicationStatus, StatusTransition
 
 # ---------------------------------------------------------------------------
 # Valid transitions
 # ---------------------------------------------------------------------------
 
 VALID_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
-    ApplicationStatus.DISCOVERED: {ApplicationStatus.SCORED},
+    ApplicationStatus.DISCOVERED: {
+        ApplicationStatus.SCORED,
+        ApplicationStatus.BELOW_THRESHOLD,
+    },
     ApplicationStatus.SCORED: {
         ApplicationStatus.OUTREACH_PENDING,
         ApplicationStatus.OUTREACH_SENT,  # backward compat (auto-send)
+        ApplicationStatus.BELOW_THRESHOLD,  # threshold reclassification
         ApplicationStatus.PASSED,
+    },
+    ApplicationStatus.BELOW_THRESHOLD: {
+        ApplicationStatus.SCORED,  # promotion (manual or threshold lowered)
+        ApplicationStatus.PASSED,  # discard
     },
     ApplicationStatus.OUTREACH_PENDING: {
         ApplicationStatus.OUTREACH_SENT,
@@ -33,6 +45,7 @@ VALID_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.FOLLOW_UP_1,  # backward compat (auto-send)
         ApplicationStatus.RESPONSE_RECEIVED,
         ApplicationStatus.GHOSTED,
+        ApplicationStatus.REJECTED,
     },
     ApplicationStatus.FOLLOW_UP_PENDING: {
         ApplicationStatus.FOLLOW_UP_1,
@@ -45,10 +58,12 @@ VALID_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
         ApplicationStatus.FOLLOW_UP_2,  # backward compat (auto-send)
         ApplicationStatus.RESPONSE_RECEIVED,
         ApplicationStatus.GHOSTED,
+        ApplicationStatus.REJECTED,
     },
     ApplicationStatus.FOLLOW_UP_2: {
         ApplicationStatus.RESPONSE_RECEIVED,
         ApplicationStatus.GHOSTED,
+        ApplicationStatus.REJECTED,
     },
     ApplicationStatus.RESPONSE_RECEIVED: {
         ApplicationStatus.INTERVIEW_SCHEDULED,
@@ -107,7 +122,11 @@ class InvalidTransitionError(Exception):
         self.target = target
         self.application_id = application_id
         valid = VALID_TRANSITIONS.get(current, set())
-        valid_str = ", ".join(sorted(s.value for s in valid)) if valid else "none (terminal state)"
+        valid_str = (
+            ", ".join(sorted(s.value for s in valid))
+            if valid
+            else "none (terminal state)"
+        )
         msg = (
             f"Cannot transition from {current.value} to {target.value}. "
             f"Valid transitions from {current.value}: {valid_str}."
@@ -145,11 +164,22 @@ def transition(
     if not can_transition(app.status, target):
         raise InvalidTransitionError(app.status, target, application_id)
 
+    now = datetime.now()
     updated = app.model_copy(
         update={
             "status": target,
-            "updated_at": datetime.now(),
+            "updated_at": now,
         }
     )
     save_application(conn, updated)
+
+    save_status_transition(
+        conn,
+        StatusTransition(
+            application_id=application_id,
+            from_status=app.status.value,
+            to_status=target.value,
+            transitioned_at=now,
+        ),
+    )
     return updated

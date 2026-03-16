@@ -31,14 +31,13 @@ class TestSourcesList:
         result = runner.invoke(app, ["sources", "list"])
         assert result.exit_code == 0
         assert "manual" in result.output
-        assert "emploi_quebec" in result.output
+        assert "jobbank" in result.output
+        assert "jobillico" in result.output
 
     def test_list_shows_status(self):
         result = runner.invoke(app, ["sources", "list"])
         assert result.exit_code == 0
-        # manual should be ready, emploi_quebec should be stub
         assert "ready" in result.output
-        assert "stub" in result.output or "not implemented" in result.output
 
 
 class TestSourcesScan:
@@ -56,14 +55,6 @@ class TestSourcesScan:
         )
         assert result.exit_code == 0
         assert "No new opportunities found" in result.output
-
-    def test_scan_emploi_quebec_shows_not_implemented(self):
-        result = runner.invoke(
-            app,
-            ["sources", "scan", "--source", "emploi_quebec", "--keywords", "python"],
-        )
-        assert result.exit_code == 1
-        assert "not yet implemented" in result.output
 
     def test_scan_with_location(self):
         result = runner.invoke(

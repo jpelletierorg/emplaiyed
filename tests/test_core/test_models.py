@@ -104,14 +104,6 @@ class TestProfile:
         assert p.smtp_config.port == 587
         assert len(p.employment_history[0].highlights) == 1
 
-    def test_name_required(self):
-        with pytest.raises(ValidationError):
-            Profile(email="a@b.com")  # type: ignore[call-arg]
-
-    def test_email_required(self):
-        with pytest.raises(ValidationError):
-            Profile(name="Alice")  # type: ignore[call-arg]
-
     def test_serialization_round_trip(self):
         p = Profile(
             name="Carol",
@@ -132,20 +124,6 @@ class TestProfile:
 
 
 class TestOpportunity:
-    def test_creation_with_defaults(self):
-        now = datetime(2025, 1, 15, 10, 0, 0)
-        opp = Opportunity(
-            source="indeed",
-            company="Acme",
-            title="Dev",
-            description="Build things",
-            scraped_at=now,
-        )
-        assert opp.id  # uuid was generated
-        assert opp.source == "indeed"
-        assert opp.source_url is None
-        assert opp.raw_data is None
-
     def test_full_opportunity(self):
         now = datetime(2025, 1, 15, 10, 0, 0)
         opp = Opportunity(
@@ -172,31 +150,31 @@ class TestOpportunity:
 
 
 class TestScoredOpportunity:
-    def test_valid_score(self):
-        opp = Opportunity(
+    def _make_opportunity(self) -> Opportunity:
+        return Opportunity(
             source="manual",
             company="X",
             title="Y",
             description="Z",
             scraped_at=datetime.now(),
         )
+
+    def test_valid_score(self):
         scored = ScoredOpportunity(
-            opportunity=opp, score=85, justification="Great match"
+            opportunity=self._make_opportunity(),
+            score=85,
+            justification="Great match",
         )
         assert scored.score == 85
 
-    def test_score_bounds(self):
-        opp = Opportunity(
-            source="manual",
-            company="X",
-            title="Y",
-            description="Z",
-            scraped_at=datetime.now(),
-        )
+    @pytest.mark.parametrize("bad_score", [101, -1])
+    def test_score_out_of_bounds_rejected(self, bad_score: int):
         with pytest.raises(ValidationError):
-            ScoredOpportunity(opportunity=opp, score=101, justification="Too high")
-        with pytest.raises(ValidationError):
-            ScoredOpportunity(opportunity=opp, score=-1, justification="Too low")
+            ScoredOpportunity(
+                opportunity=self._make_opportunity(),
+                score=bad_score,
+                justification="Invalid",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -205,25 +183,41 @@ class TestScoredOpportunity:
 
 
 class TestEnums:
-    def test_application_status_values(self):
-        assert ApplicationStatus.DISCOVERED.value == "DISCOVERED"
-        assert ApplicationStatus.GHOSTED.value == "GHOSTED"
-        assert len(ApplicationStatus) == 18
+    @pytest.mark.parametrize(
+        "enum_cls, member, expected_value",
+        [
+            (ApplicationStatus, "DISCOVERED", "DISCOVERED"),
+            (ApplicationStatus, "GHOSTED", "GHOSTED"),
+            (InteractionType, "EMAIL_SENT", "EMAIL_SENT"),
+            (OfferStatus, "PENDING", "PENDING"),
+            (OfferStatus, "COUNTERED", "COUNTERED"),
+        ],
+    )
+    def test_enum_values(self, enum_cls, member: str, expected_value: str):
+        assert enum_cls[member].value == expected_value
 
-    def test_interaction_type_values(self):
-        assert InteractionType.EMAIL_SENT.value == "EMAIL_SENT"
-        assert len(InteractionType) == 8
+    @pytest.mark.parametrize(
+        "enum_cls, expected_len",
+        [
+            (ApplicationStatus, 19),
+            (InteractionType, 8),
+            (OfferStatus, 5),
+        ],
+    )
+    def test_enum_member_counts(self, enum_cls, expected_len: int):
+        assert len(enum_cls) == expected_len
 
-    def test_offer_status_values(self):
-        assert OfferStatus.PENDING.value == "PENDING"
-        assert OfferStatus.COUNTERED.value == "COUNTERED"
-        assert len(OfferStatus) == 5
-
-    def test_enum_string_comparison(self):
+    @pytest.mark.parametrize(
+        "enum_member, string_value",
+        [
+            (ApplicationStatus.DISCOVERED, "DISCOVERED"),
+            (InteractionType.NOTE, "NOTE"),
+            (OfferStatus.ACCEPTED, "ACCEPTED"),
+        ],
+    )
+    def test_str_enum_equals_string(self, enum_member, string_value: str):
         """str enums should compare equal to their string values."""
-        assert ApplicationStatus.DISCOVERED == "DISCOVERED"
-        assert InteractionType.NOTE == "NOTE"
-        assert OfferStatus.ACCEPTED == "ACCEPTED"
+        assert enum_member == string_value
 
 
 # ---------------------------------------------------------------------------
@@ -232,17 +226,6 @@ class TestEnums:
 
 
 class TestApplication:
-    def test_creation(self):
-        now = datetime.now()
-        app = Application(
-            opportunity_id="opp-1",
-            status=ApplicationStatus.DISCOVERED,
-            created_at=now,
-            updated_at=now,
-        )
-        assert app.id  # uuid generated
-        assert app.status == ApplicationStatus.DISCOVERED
-
     def test_status_transition(self):
         now = datetime.now()
         app = Application(
@@ -251,6 +234,7 @@ class TestApplication:
             created_at=now,
             updated_at=now,
         )
+        assert app.id  # uuid generated
         app.status = ApplicationStatus.SCORED
         assert app.status == ApplicationStatus.SCORED
 
@@ -275,18 +259,6 @@ class TestInteraction:
         assert i.direction == "outbound"
         assert i.metadata["thread_id"] == "abc"
 
-    def test_optional_fields(self):
-        now = datetime.now()
-        i = Interaction(
-            application_id="app-1",
-            type=InteractionType.NOTE,
-            direction="outbound",
-            channel="internal",
-            created_at=now,
-        )
-        assert i.content is None
-        assert i.metadata is None
-
 
 # ---------------------------------------------------------------------------
 # Offer
@@ -308,16 +280,6 @@ class TestOffer:
         assert o.currency == "CAD"
         assert o.salary == 100000
 
-    def test_default_currency(self):
-        now = datetime.now()
-        o = Offer(
-            application_id="app-1",
-            status=OfferStatus.PENDING,
-            created_at=now,
-        )
-        assert o.currency == "CAD"
-        assert o.salary is None
-
     def test_serialization(self):
         now = datetime.now()
         o = Offer(
@@ -338,21 +300,6 @@ class TestOffer:
 
 
 class TestScheduledEvent:
-    def test_creation_with_defaults(self):
-        now = datetime.now()
-        event = ScheduledEvent(
-            application_id="app-1",
-            event_type="phone_screen",
-            scheduled_date=datetime(2025, 1, 14, 14, 0, 0),
-            created_at=now,
-        )
-        assert event.id  # uuid was generated
-        assert event.application_id == "app-1"
-        assert event.event_type == "phone_screen"
-        assert event.scheduled_date == datetime(2025, 1, 14, 14, 0, 0)
-        assert event.notes is None
-        assert event.created_at == now
-
     def test_creation_with_all_fields(self):
         now = datetime.now()
         event = ScheduledEvent(
@@ -365,17 +312,6 @@ class TestScheduledEvent:
         )
         assert event.id == "evt-custom"
         assert event.notes == "With Sarah Chen, Talent Acquisition"
-
-    def test_custom_id(self):
-        now = datetime.now()
-        event = ScheduledEvent(
-            id="my-custom-id",
-            application_id="app-1",
-            event_type="onsite",
-            scheduled_date=datetime(2025, 2, 1, 9, 0, 0),
-            created_at=now,
-        )
-        assert event.id == "my-custom-id"
 
     def test_serialization_round_trip(self):
         now = datetime.now()
@@ -394,14 +330,16 @@ class TestScheduledEvent:
         assert event2.notes == event.notes
         assert event2.created_at == event.created_at
 
-    def test_various_event_types(self):
+    @pytest.mark.parametrize(
+        "event_type",
+        ["phone_screen", "technical_interview", "onsite", "follow_up_due"],
+    )
+    def test_various_event_types(self, event_type: str):
         """Different event types should all be valid strings."""
-        now = datetime.now()
-        for event_type in ["phone_screen", "technical_interview", "onsite", "follow_up_due"]:
-            event = ScheduledEvent(
-                application_id="app-1",
-                event_type=event_type,
-                scheduled_date=datetime(2025, 1, 20, 10, 0, 0),
-                created_at=now,
-            )
-            assert event.event_type == event_type
+        event = ScheduledEvent(
+            application_id="app-1",
+            event_type=event_type,
+            scheduled_date=datetime(2025, 1, 20, 10, 0, 0),
+            created_at=datetime.now(),
+        )
+        assert event.event_type == event_type

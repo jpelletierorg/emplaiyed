@@ -19,6 +19,7 @@ from textual.widgets.option_list import Option
 from emplaiyed.console.funnel_stats import compute_funnel
 from emplaiyed.console.stages import STAGE_GROUPS, STAGE_TAB_ORDER
 from emplaiyed.core.database import (
+    delete_application,
     get_application,
     get_default_db_path,
     get_opportunity,
@@ -29,6 +30,7 @@ from emplaiyed.core.database import (
     list_interactions,
     list_pending_work_items,
     list_status_transitions,
+    reclassify_threshold_apps,
     save_event,
     save_interaction,
 )
@@ -50,15 +52,57 @@ _ID_TO_TAB = {v: k for k, v in _TAB_IDS.items()}
 
 # Actions valid per tab
 _TAB_ACTIONS: dict[str, set[str]] = {
-    "Queue": {"cursor_down", "cursor_up", "mark_done", "mark_passed", "open_assets", "open_url"},
-    "Applied": {"cursor_down", "cursor_up", "open_url", "add_note", "mark_response", "mark_ghosted", "log_followup"},
-    "Active": {"cursor_down", "cursor_up", "open_url", "add_note", "schedule_interview", "interview_completed", "mark_rejected", "mark_offer"},
-    "Offers": {"cursor_down", "cursor_up", "open_url", "add_note", "mark_rejected", "accept_offer"},
-    "Closed": {"cursor_down", "cursor_up", "open_url"},
+    "Queue": {
+        "cursor_down",
+        "cursor_up",
+        "mark_done",
+        "mark_passed",
+        "open_assets",
+        "open_url",
+        "delete_application",
+        "talk",
+        "generate",
+        "toggle_below_threshold",
+    },
+    "Applied": {
+        "cursor_down",
+        "cursor_up",
+        "open_url",
+        "add_note",
+        "mark_response",
+        "mark_ghosted",
+        "mark_rejected",
+        "log_followup",
+        "delete_application",
+        "talk",
+    },
+    "Active": {
+        "cursor_down",
+        "cursor_up",
+        "open_url",
+        "add_note",
+        "schedule_interview",
+        "interview_completed",
+        "mark_rejected",
+        "mark_offer",
+        "delete_application",
+        "talk",
+    },
+    "Offers": {
+        "cursor_down",
+        "cursor_up",
+        "open_url",
+        "add_note",
+        "mark_rejected",
+        "accept_offer",
+        "delete_application",
+        "talk",
+    },
+    "Closed": {"cursor_down", "cursor_up", "open_url", "delete_application"},
     "Funnel": set(),
 }
 
-_ALWAYS_VALID = {"prev_tab", "next_tab", "quit"}
+_ALWAYS_VALID = {"prev_tab", "next_tab", "quit", "search"}
 
 
 class WorkConsoleApp(App):
@@ -100,6 +144,7 @@ class WorkConsoleApp(App):
         Binding("u", "open_url", "Open URL", show=True),
         Binding("n", "add_note", "Note", show=True),
         Binding("r", "mark_response", "Response", show=True),
+        Binding("g", "generate", "Generate", show=True),
         Binding("g", "mark_ghosted", "Ghosted", show=True),
         Binding("s", "schedule_interview", "Schedule", show=True),
         Binding("c", "interview_completed", "Completed", show=True),
@@ -107,6 +152,10 @@ class WorkConsoleApp(App):
         Binding("f", "log_followup", "Follow-up", show=True),
         Binding("o", "mark_offer", "Offer", show=True),
         Binding("a", "accept_offer", "Accept", show=True),
+        Binding("t", "talk", "Chat", show=True),
+        Binding("z", "delete_application", "Delete", show=True),
+        Binding("b", "toggle_below_threshold", "Below threshold", show=True),
+        Binding("slash", "search", "Search", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
 
@@ -117,6 +166,8 @@ class WorkConsoleApp(App):
         self._queue_apps: list[Application] = []
         self._tab_apps: dict[str, list[Application]] = {}
         self._generating: set[str] = set()
+        self._closing = False
+        self._show_below_threshold = False
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -129,13 +180,22 @@ class WorkConsoleApp(App):
                     else:
                         with Horizontal(classes="tab-content"):
                             yield OptionList(id=f"list-{tab_key}", classes="tab-list")
-                            yield Static("", id=f"detail-{tab_key}", classes="tab-detail")
+                            yield Static(
+                                "", id=f"detail-{tab_key}", classes="tab-detail"
+                            )
         yield Footer()
 
     def on_mount(self) -> None:
         path = self._db_path or get_default_db_path()
         self._conn = init_db(path)
         self._refresh_all()
+
+    def on_unmount(self) -> None:
+        self._closing = True
+        self.workers.cancel_all()
+        if self._conn:
+            self._conn.close()
+            self._conn = None
 
     # ------------------------------------------------------------------
     # Refresh
@@ -149,11 +209,18 @@ class WorkConsoleApp(App):
         self._update_tab_labels()
 
     def _refresh_queue(self) -> None:
+        from emplaiyed.llm.config import SCORE_THRESHOLD
+
+        # Reclassify apps whose score now crosses the threshold boundary.
+        reclassify_threshold_apps(self._conn, SCORE_THRESHOLD)
+
         queue_statuses = [
             ApplicationStatus.SCORED,
             ApplicationStatus.OUTREACH_PENDING,
             ApplicationStatus.FOLLOW_UP_PENDING,
         ]
+        if self._show_below_threshold:
+            queue_statuses.append(ApplicationStatus.BELOW_THRESHOLD)
         self._queue_apps = list_applications_by_statuses(self._conn, queue_statuses)
         self._queue_apps.sort(key=lambda a: a.score or 0, reverse=True)
         option_list = self.query_one("#list-queue", OptionList)
@@ -167,10 +234,9 @@ class WorkConsoleApp(App):
         for app in self._queue_apps:
             opp = get_opportunity(self._conn, app.opportunity_id)
             label = f"{opp.company} — {opp.title}" if opp else app.id
+            if app.status == ApplicationStatus.BELOW_THRESHOLD:
+                label = f"[BT] {label}"
             option_list.add_option(Option(label, id=app.id))
-        for app in self._queue_apps:
-            if not has_assets(app.id):
-                self._trigger_asset_generation(app.id)
         option_list.highlighted = 0
         self._show_queue_detail(0)
 
@@ -219,12 +285,25 @@ class WorkConsoleApp(App):
                     line += f"   avg {hours:.0f}h in stage"
             lines.append(line)
 
-        lines.extend([
-            "",
-            f"  Total:   {snapshot.total}",
-            f"  Active:  {snapshot.active}",
-            f"  Closed:  {snapshot.closed}",
-        ])
+        if snapshot.closed_breakdown:
+            lines.append("")
+            lines.append("CLOSED BREAKDOWN")
+            lines.append("")
+            for reason, count in snapshot.closed_breakdown.items():
+                lines.append(f"    {reason:<15} {count:>3}")
+
+        below_threshold = sum(
+            1 for a in all_apps if a.status == ApplicationStatus.BELOW_THRESHOLD
+        )
+        lines.extend(
+            [
+                "",
+                f"  Total:            {snapshot.total}",
+                f"  Active:           {snapshot.active}",
+                f"  Closed:           {snapshot.closed}",
+                f"  Below threshold:  {below_threshold}",
+            ]
+        )
 
         detail = self.query_one("#detail-funnel", Static)
         detail.update("\n".join(lines))
@@ -235,7 +314,8 @@ class WorkConsoleApp(App):
         except Exception:
             return
         queue_count = len(self._queue_apps)
-        tc.get_tab(_TAB_IDS["Queue"]).label = f"Queue ({queue_count})"
+        bt_suffix = " +BT" if self._show_below_threshold else ""
+        tc.get_tab(_TAB_IDS["Queue"]).label = f"Queue ({queue_count}{bt_suffix})"
         for tab_name in STAGE_GROUPS:
             count = len(self._tab_apps.get(tab_name, []))
             tc.get_tab(_TAB_IDS[tab_name]).label = f"{tab_name} ({count})"
@@ -259,9 +339,15 @@ class WorkConsoleApp(App):
                 lines.append(f"Location: {opp.location}")
             if opp.source_url:
                 lines.append(f"URL:      {opp.source_url}")
+            if opp.short_id:
+                lines.append(f"Tag:      {opp.short_id}")
+                lines.append(f"Email:    moi+{opp.short_id}@jpelletier.org")
 
         if app.score is not None:
             lines.append(f"Score:    {app.score}")
+
+        if app.status == ApplicationStatus.BELOW_THRESHOLD:
+            lines.append("Status:   BELOW THRESHOLD")
 
         lines.append("")
 
@@ -280,8 +366,7 @@ class WorkConsoleApp(App):
         elif app.id in self._generating:
             lines.append("Assets: Generating...")
         else:
-            lines.append("Assets: Not generated")
-            self._trigger_asset_generation(app.id)
+            lines.append("Assets: Not generated (g to generate)")
 
         detail = self.query_one("#detail-queue", Static)
         detail.update("\n".join(lines))
@@ -301,6 +386,9 @@ class WorkConsoleApp(App):
                 lines.append(f"Location: {opp.location}")
             if opp.source_url:
                 lines.append(f"URL:      {opp.source_url}")
+            if opp.short_id:
+                lines.append(f"Tag:      {opp.short_id}")
+                lines.append(f"Email:    moi+{opp.short_id}@jpelletier.org")
 
         lines.append(f"Status:   {app.status.value}")
         if app.score is not None:
@@ -334,9 +422,7 @@ class WorkConsoleApp(App):
             label = ix.content or ""
             if len(label) > 60:
                 label = label[:57] + "..."
-            timeline_entries.append(
-                (ix.created_at, f"[{ix.type.value}] {label}")
-            )
+            timeline_entries.append((ix.created_at, f"[{ix.type.value}] {label}"))
 
         for ev in list_events(self._conn, application_id=app.id):
             label = ev.notes or ""
@@ -396,7 +482,9 @@ class WorkConsoleApp(App):
     # Event handlers
     # ------------------------------------------------------------------
 
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
         list_id = event.option_list.id
         if not list_id or not list_id.startswith("list-"):
             return
@@ -419,7 +507,9 @@ class WorkConsoleApp(App):
             if 0 <= idx < len(apps):
                 self._show_pipeline_detail(tab_name, idx)
 
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+    def on_tabbed_content_tab_activated(
+        self, event: TabbedContent.TabActivated
+    ) -> None:
         self.refresh_bindings()
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
@@ -462,6 +552,71 @@ class WorkConsoleApp(App):
         tc.active = _TAB_IDS[STAGE_TAB_ORDER[next_idx]]
 
     # ------------------------------------------------------------------
+    # Search
+    # ------------------------------------------------------------------
+
+    def action_search(self) -> None:
+        if self._conn is None:
+            return
+
+        from emplaiyed.console.search_modal import SearchModal
+
+        def _on_result(app_id: str | None) -> None:
+            if app_id is not None:
+                self._navigate_to_app(app_id)
+
+        self.push_screen(SearchModal(self._conn), callback=_on_result)
+
+    def _navigate_to_app(self, app_id: str) -> None:
+        """Switch to the tab containing *app_id* and highlight it."""
+        from emplaiyed.core.database import get_application
+
+        app = get_application(self._conn, app_id)
+        if app is None:
+            return
+
+        # Determine which tab the app lives in
+        queue_statuses = {
+            ApplicationStatus.SCORED,
+            ApplicationStatus.OUTREACH_PENDING,
+            ApplicationStatus.FOLLOW_UP_PENDING,
+            ApplicationStatus.BELOW_THRESHOLD,
+        }
+        if app.status in queue_statuses:
+            target_tab = "Queue"
+        else:
+            target_tab = None
+            for tab_name, statuses in STAGE_GROUPS.items():
+                if app.status in statuses:
+                    target_tab = tab_name
+                    break
+            if target_tab is None:
+                return
+
+        # Switch tab
+        tc = self.query_one(TabbedContent)
+        tc.active = _TAB_IDS[target_tab]
+
+        # Refresh the tab to ensure the app is in the list
+        if target_tab == "Queue":
+            self._refresh_queue()
+            apps = self._queue_apps
+        else:
+            self._refresh_pipeline_tab(target_tab)
+            apps = self._tab_apps.get(target_tab, [])
+
+        # Find the app's index and highlight it
+        tab_key = target_tab.lower()
+        for idx, a in enumerate(apps):
+            if a.id == app_id:
+                try:
+                    option_list = self.query_one(f"#list-{tab_key}", OptionList)
+                    option_list.highlighted = idx
+                except Exception:
+                    pass
+                break
+
+    # ------------------------------------------------------------------
     # Queue actions
     # ------------------------------------------------------------------
 
@@ -478,10 +633,21 @@ class WorkConsoleApp(App):
                 if wi.application_id == app.id:
                     complete_work_item(self._conn, wi.id)
                     break
-        elif app.status == ApplicationStatus.SCORED:
+        elif app.status in (
+            ApplicationStatus.SCORED,
+            ApplicationStatus.BELOW_THRESHOLD,
+        ):
+            # Promote to SCORED first if below threshold, so the work item
+            # creation and state machine transitions work cleanly.
+            if app.status == ApplicationStatus.BELOW_THRESHOLD:
+                transition(self._conn, app.id, ApplicationStatus.SCORED)
             # No work item yet — create one and immediately complete it
             opp = get_opportunity(self._conn, app.opportunity_id)
-            title = f"Apply to {opp.company} — {opp.title}" if opp else f"Apply for {app.id}"
+            title = (
+                f"Apply to {opp.company} — {opp.title}"
+                if opp
+                else f"Apply for {app.id}"
+            )
             wi = create_work_item(
                 self._conn,
                 application_id=app.id,
@@ -511,9 +677,39 @@ class WorkConsoleApp(App):
             refreshed = get_application(self._conn, app.id)
             if refreshed and can_transition(refreshed.status, ApplicationStatus.PASSED):
                 transition(self._conn, app.id, ApplicationStatus.PASSED)
-        elif app.status == ApplicationStatus.SCORED:
+        elif app.status in (
+            ApplicationStatus.SCORED,
+            ApplicationStatus.BELOW_THRESHOLD,
+        ):
             # No work item — transition directly to PASSED
             transition(self._conn, app.id, ApplicationStatus.PASSED)
+        self._refresh_all()
+
+    def action_toggle_below_threshold(self) -> None:
+        """Toggle visibility of below-threshold opportunities in the Queue."""
+        if self._active_tab != "Queue":
+            return
+        self._show_below_threshold = not self._show_below_threshold
+        label = "showing" if self._show_below_threshold else "hidden"
+        self.notify(f"Below-threshold items: {label}")
+        self._refresh_all()
+
+    def action_delete_application(self) -> None:
+        """Delete the selected application, its related data, and assets."""
+        import shutil
+
+        app = self._current_queue_app() or self._current_pipeline_app()
+        if app is None:
+            return
+        opp = get_opportunity(self._conn, app.opportunity_id)
+        title = opp.title if opp else "Unknown"
+        company = opp.company if opp else "Unknown"
+
+        asset_dir = get_asset_dir(app.id)
+        if asset_dir.exists():
+            shutil.rmtree(asset_dir)
+        delete_application(self._conn, app.id)
+        self.notify(f"Deleted: {company} — {title}")
         self._refresh_all()
 
     def action_open_assets(self) -> None:
@@ -529,6 +725,23 @@ class WorkConsoleApp(App):
             subprocess.run(["open", str(asset_dir)])
         elif sys.platform == "linux":
             subprocess.run(["xdg-open", str(asset_dir)])
+
+    def action_generate(self) -> None:
+        if self._active_tab != "Queue":
+            return
+        app = self._current_queue_app()
+        if app is None:
+            return
+        if has_assets(app.id):
+            self.notify("Assets already generated")
+            return
+        if app.id in self._generating:
+            self.notify("Already generating…")
+            return
+        self._trigger_asset_generation(app.id)
+        self._show_queue_detail(
+            self.query_one("#list-queue", OptionList).highlighted or 0
+        )
 
     # ------------------------------------------------------------------
     # Universal actions
@@ -552,6 +765,31 @@ class WorkConsoleApp(App):
         import webbrowser
 
         webbrowser.open(opp.source_url)
+
+    def action_talk(self) -> None:
+        """Open the chat assistant modal with full application context."""
+        app = self._current_queue_app() or self._current_pipeline_app()
+        if app is None:
+            return
+        asset_dir = get_asset_dir(app.id)
+        cv_md_path = asset_dir / "cv.md"
+        letter_md_path = asset_dir / "letter.md"
+        if not cv_md_path.exists() or not letter_md_path.exists():
+            self.notify("Assets not ready yet", severity="warning")
+            return
+        opp = get_opportunity(self._conn, app.opportunity_id)
+        if opp is None:
+            return
+        cv_md = cv_md_path.read_text(encoding="utf-8")
+        letter_md = letter_md_path.read_text(encoding="utf-8")
+
+        from emplaiyed.console.chat_modal import ChatModal
+        from emplaiyed.generation.chat_assistant import build_system_prompt
+
+        system_prompt = build_system_prompt(
+            cv_md, letter_md, opp.description, opp.company, opp.title
+        )
+        self.push_screen(ChatModal(system_prompt, opp.company))
 
     # ------------------------------------------------------------------
     # Pipeline actions
@@ -659,8 +897,13 @@ class WorkConsoleApp(App):
                         created_at=datetime.now(),
                     ),
                 )
-                if can_transition(ApplicationStatus.RESPONSE_RECEIVED, ApplicationStatus.INTERVIEW_SCHEDULED):
-                    transition(self._conn, app.id, ApplicationStatus.INTERVIEW_SCHEDULED)
+                if can_transition(
+                    ApplicationStatus.RESPONSE_RECEIVED,
+                    ApplicationStatus.INTERVIEW_SCHEDULED,
+                ):
+                    transition(
+                        self._conn, app.id, ApplicationStatus.INTERVIEW_SCHEDULED
+                    )
             self.notify("Marked as response received")
             self._refresh_all()
 
@@ -722,7 +965,7 @@ class WorkConsoleApp(App):
 
     def action_mark_rejected(self) -> None:
         tab = self._active_tab
-        if tab not in ("Active", "Offers"):
+        if tab not in ("Applied", "Active", "Offers"):
             return
         app = self._current_pipeline_app()
         if app is None:
@@ -741,7 +984,9 @@ class WorkConsoleApp(App):
         if app is None:
             return
         if app.status != ApplicationStatus.INTERVIEW_COMPLETED:
-            self.notify("Can only mark offer on completed interviews", severity="warning")
+            self.notify(
+                "Can only mark offer on completed interviews", severity="warning"
+            )
             return
 
         from emplaiyed.console.modals import NoteModal
@@ -789,32 +1034,29 @@ class WorkConsoleApp(App):
         self._generating.add(app_id)
         self._generate_assets_bg(app_id)
 
-    @work(thread=True)
-    def _generate_assets_bg(self, app_id: str) -> None:
-        import asyncio
-
+    @work(exclusive=False)
+    async def _generate_assets_bg(self, app_id: str) -> None:
         from emplaiyed.core.profile_store import get_default_profile_path, load_profile
         from emplaiyed.generation.pipeline import generate_assets
 
-        conn = init_db(self._db_path or get_default_db_path())
         try:
-            app = get_application(conn, app_id)
+            app = get_application(self._conn, app_id)
             if app is None:
                 return
-            opp = get_opportunity(conn, app.opportunity_id)
+            opp = get_opportunity(self._conn, app.opportunity_id)
             if opp is None:
                 return
             profile_path = get_default_profile_path()
             if not profile_path.exists():
                 return
             profile = load_profile(profile_path)
-            asyncio.run(generate_assets(profile, opp, app_id))
-            self.call_from_thread(self._refresh_current_queue_detail)
+            await generate_assets(profile, opp, app_id)
+            self._refresh_current_queue_detail()
         except Exception:
-            logger.warning("Asset generation failed for %s", app_id, exc_info=True)
+            if not self._closing:
+                logger.warning("Asset generation failed for %s", app_id, exc_info=True)
         finally:
             self._generating.discard(app_id)
-            conn.close()
 
     def _refresh_current_queue_detail(self) -> None:
         if self._active_tab != "Queue":

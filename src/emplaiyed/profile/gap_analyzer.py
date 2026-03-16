@@ -17,6 +17,7 @@ from emplaiyed.core.models import Aspirations, Profile
 # Public types
 # ---------------------------------------------------------------------------
 
+
 class GapPriority(str, Enum):
     """How important a gap is for the job search workflow."""
 
@@ -61,6 +62,7 @@ class GapReport:
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------
+
 
 def analyze_gaps(profile: Profile) -> GapReport:
     """Examine *profile* and return a :class:`GapReport` of missing fields.
@@ -117,12 +119,22 @@ def analyze_gaps(profile: Profile) -> GapReport:
             )
         )
 
+    if not profile.projects:
+        gaps.append(
+            Gap(
+                field_name="projects",
+                description="Do you have any personal or side projects worth highlighting?",
+                priority=GapPriority.NICE_TO_HAVE,
+            )
+        )
+
     return GapReport(gaps=gaps)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _all_aspiration_gaps() -> list[Gap]:
     """Return gaps for every aspiration sub-field."""
@@ -155,6 +167,11 @@ def _all_aspiration_gaps() -> list[Gap]:
         Gap(
             field_name="aspirations.work_arrangement",
             description="What work arrangement do you prefer? (remote, hybrid, on-site)",
+            priority=GapPriority.REQUIRED,
+        ),
+        Gap(
+            field_name="aspirations.statement",
+            description="Describe your career goals in 1-2 sentences (used in cover letters).",
             priority=GapPriority.REQUIRED,
         ),
     ]
@@ -214,6 +231,15 @@ def _aspiration_field_gaps(asp: Aspirations) -> list[Gap]:
             Gap(
                 field_name="aspirations.work_arrangement",
                 description="What work arrangement do you prefer? (remote, hybrid, on-site)",
+                priority=GapPriority.REQUIRED,
+            )
+        )
+
+    if not asp.statement:
+        gaps.append(
+            Gap(
+                field_name="aspirations.statement",
+                description="Describe your career goals in 1-2 sentences (used in cover letters).",
                 priority=GapPriority.REQUIRED,
             )
         )

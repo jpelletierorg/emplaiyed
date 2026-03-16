@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+
+{% block title %}Build Profile - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl mx-auto">
+  <div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Build Your Profile</h1>
+    <p class="text-base-content/60">Your profile drives everything: tailored CVs, outreach, scoring.</p>
+    <!-- Progress steps -->
+    <ul class="steps steps-horizontal w-full mt-6">
+      <li class="step step-primary">Upload CV</li>
+      <li class="step">Review</li>
+      <li class="step">Fill Gaps</li>
+      <li class="step">Done</li>
+    </ul>
+  </div>
+
+  {% if has_existing %}
+  <div class="alert alert-info mb-6">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="stroke-current shrink-0 w-6 h-6"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+    <span>An existing profile was found. Uploading a new CV will merge with your current data.</span>
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="alert alert-error mb-6">
+    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    <span>{{ error }}</span>
+  </div>
+  {% endif %}
+
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title mb-4">Do you have an existing CV?</h2>
+
+      <form action="/api/profile/build/upload" method="post" enctype="multipart/form-data"
+            x-data="{ mode: 'file' }">
+
+        <!-- Mode tabs -->
+        <div class="tabs tabs-boxed mb-4">
+          <a class="tab" :class="mode === 'file' && 'tab-active'" @click="mode = 'file'">Upload File</a>
+          <a class="tab" :class="mode === 'paste' && 'tab-active'" @click="mode = 'paste'">Paste Text</a>
+          <a class="tab" :class="mode === 'fresh' && 'tab-active'" @click="mode = 'fresh'">Start Fresh</a>
+        </div>
+
+        <!-- File upload -->
+        <div x-show="mode === 'file'" class="mb-4">
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">Upload your CV (PDF or text file)</span>
+            </div>
+            <input type="file" name="cv_file" accept=".pdf,.txt,.md"
+                   class="file-input file-input-bordered w-full" />
+          </label>
+        </div>
+
+        <!-- Paste text -->
+        <div x-show="mode === 'paste'" class="mb-4">
+          <label class="form-control w-full">
+            <div class="label">
+              <span class="label-text">Paste your CV content</span>
+            </div>
+            <textarea name="cv_text" rows="12" placeholder="Paste your CV text here..."
+                      class="textarea textarea-bordered w-full font-mono text-sm"></textarea>
+          </label>
+        </div>
+
+        <!-- Start fresh -->
+        <div x-show="mode === 'fresh'" class="mb-4">
+          <p class="text-base-content/60">No CV? No problem. We'll build your profile from scratch.</p>
+        </div>
+
+        <div class="card-actions justify-end mt-4">
+          <a href="/profile" class="btn btn-ghost">Cancel</a>
+          <button type="submit" class="btn btn-primary">
+            <span x-text="mode === 'fresh' ? 'Start Fresh' : 'Parse CV'"></span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6" /></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

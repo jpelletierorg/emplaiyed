@@ -1,0 +1,266 @@
+{% extends "base.html" %}
+
+{% block title %}Sources - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto" x-data="sourcesApp()">
+
+  <div class="flex items-center justify-between mb-6">
+    <div>
+      <h1 class="text-3xl font-bold">Sources</h1>
+      <p class="text-base-content/60 mt-1">Scan job boards or let the AI search agent find opportunities for you.</p>
+    </div>
+  </div>
+
+  {% if not has_profile %}
+  <div class="alert alert-warning mb-6">
+    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+    <span>Build a <a href="/profile/build" class="link">profile</a> first to enable scoring and smart keyword derivation.</span>
+  </div>
+  {% endif %}
+
+  <!-- Agentic Search Card -->
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h2 class="card-title text-lg">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+        </svg>
+        AI Search Agent
+      </h2>
+      <p class="text-base-content/60 text-sm mb-3">
+        The AI agent autonomously searches all sources, generates diverse queries, and filters results based on your profile.
+      </p>
+      <form @submit.prevent="startSearch()" class="flex flex-col gap-3">
+        <div class="form-control">
+          <label class="label"><span class="label-text">Direction (optional)</span></label>
+          <input type="text" x-model="searchDirection"
+                 placeholder='e.g. "find me applied AI engineer roles building agents"'
+                 class="input input-bordered w-full" />
+        </div>
+        <div class="flex items-end gap-3">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Time limit</span></label>
+            <select x-model="searchTimeLimit" class="select select-bordered select-sm">
+              <option value="120">2 min</option>
+              <option value="300" selected>5 min</option>
+              <option value="600">10 min</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary" :disabled="running"
+                  {% if not has_profile %}disabled{% endif %}>
+            <span x-show="!running">Start Search</span>
+            <span x-show="running" class="loading loading-spinner loading-sm"></span>
+            <span x-show="running">Searching...</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Manual Scan Card -->
+  <div class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h2 class="card-title text-lg">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-secondary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        Manual Scan
+      </h2>
+      <p class="text-base-content/60 text-sm mb-3">
+        Scan a specific source with custom keywords and location.
+      </p>
+      <form @submit.prevent="startScan()" class="flex flex-col gap-3">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Source</span></label>
+            <select x-model="scanSource" class="select select-bordered">
+              {% for src in sources %}
+              <option value="{{ src.name }}">{{ src.name }} ({{ src.class_name }})</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Keywords</span></label>
+            <input type="text" x-model="scanKeywords"
+                   value="{{ default_keywords }}"
+                   placeholder="e.g. Python, ML Engineer"
+                   class="input input-bordered" />
+          </div>
+          <div class="form-control">
+            <label class="label"><span class="label-text">Location</span></label>
+            <input type="text" x-model="scanLocation"
+                   value="{{ default_location }}"
+                   placeholder="e.g. Montreal, QC"
+                   class="input input-bordered" />
+          </div>
+        </div>
+        <div class="flex items-end gap-3">
+          <div class="form-control">
+            <label class="label"><span class="label-text">Max results</span></label>
+            <input type="number" x-model="scanMaxResults" value="50" min="5" max="200"
+                   class="input input-bordered input-sm w-24" />
+          </div>
+          <button type="submit" class="btn btn-secondary" :disabled="running">
+            <span x-show="!running">Scan</span>
+            <span x-show="running" class="loading loading-spinner loading-sm"></span>
+            <span x-show="running">Scanning...</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Progress Panel (shown when running) -->
+  <div x-show="progressLog.length > 0" x-cloak class="card bg-base-100 shadow mb-6">
+    <div class="card-body">
+      <h2 class="card-title text-lg flex items-center gap-2">
+        <span x-show="running" class="loading loading-spinner loading-sm text-primary"></span>
+        <span x-show="running">Progress</span>
+        <span x-show="!running && lastResult === 'success'">Complete</span>
+        <span x-show="!running && lastResult === 'error'" class="text-error">Error</span>
+      </h2>
+      <div class="bg-base-200 rounded-lg p-3 max-h-64 overflow-y-auto font-mono text-sm" x-ref="logContainer">
+        <template x-for="(entry, idx) in progressLog" :key="idx">
+          <div :class="{
+            'text-error': entry.type === 'error',
+            'text-success': entry.type === 'done',
+            'text-base-content/70': entry.type === 'progress'
+          }" x-text="entry.message" class="py-0.5"></div>
+        </template>
+      </div>
+      <div x-show="!running && resultCount > 0" class="mt-3">
+        <a href="/queue" class="btn btn-primary btn-sm">Review Queue</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Available Sources Table -->
+  <div class="card bg-base-100 shadow">
+    <div class="card-body">
+      <h2 class="card-title text-lg mb-3">Available Sources</h2>
+      <div class="overflow-x-auto">
+        <table class="table table-sm">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Class</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for src in sources %}
+            <tr>
+              <td class="font-medium">{{ src.name }}</td>
+              <td class="text-base-content/60">{{ src.class_name }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function sourcesApp() {
+  return {
+    running: false,
+    lastResult: null,    // 'success' | 'error' | null
+    resultCount: 0,
+    progressLog: [],
+
+    // Scan form
+    scanSource: '{{ sources[0].name if sources else "" }}',
+    scanKeywords: '{{ default_keywords }}',
+    scanLocation: '{{ default_location }}',
+    scanMaxResults: 50,
+
+    // Search form
+    searchDirection: '',
+    searchTimeLimit: 300,
+
+    _listen(url, formData) {
+      this.running = true;
+      this.lastResult = null;
+      this.resultCount = 0;
+      this.progressLog = [];
+
+      // POST form data and get SSE stream back
+      fetch(url, { method: 'POST', body: formData })
+        .then(response => {
+          if (!response.ok) {
+            return response.text().then(t => { throw new Error(t); });
+          }
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
+
+          const processChunk = ({ done, value }) => {
+            if (done) {
+              this.running = false;
+              return;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            // SSE format: "event: <type>\ndata: <data>\n\n"
+            const messages = buffer.split('\n\n');
+            buffer = messages.pop(); // keep incomplete message in buffer
+
+            for (const msg of messages) {
+              if (!msg.trim()) continue;
+              let eventType = 'progress';
+              let data = '';
+              for (const line of msg.split('\n')) {
+                if (line.startsWith('event:')) eventType = line.slice(6).trim();
+                else if (line.startsWith('data:')) data = line.slice(5).trim();
+              }
+              if (!data) continue;
+
+              this.progressLog.push({ type: eventType, message: data });
+              this.$nextTick(() => {
+                if (this.$refs.logContainer) {
+                  this.$refs.logContainer.scrollTop = this.$refs.logContainer.scrollHeight;
+                }
+              });
+
+              if (eventType === 'done') {
+                this.running = false;
+                this.resultCount = parseInt(data) || 0;
+                this.lastResult = 'success';
+              } else if (eventType === 'error') {
+                this.lastResult = 'error';
+              }
+            }
+            return reader.read().then(processChunk);
+          };
+
+          return reader.read().then(processChunk);
+        })
+        .catch(err => {
+          this.running = false;
+          this.lastResult = 'error';
+          this.progressLog.push({ type: 'error', message: err.message || 'Request failed' });
+        });
+    },
+
+    startScan() {
+      const fd = new FormData();
+      fd.append('source_name', this.scanSource);
+      fd.append('keywords', this.scanKeywords);
+      fd.append('location', this.scanLocation);
+      fd.append('max_results', this.scanMaxResults);
+      this._listen('/api/sources/scan', fd);
+    },
+
+    startSearch() {
+      const fd = new FormData();
+      fd.append('direction', this.searchDirection);
+      fd.append('time_limit', this.searchTimeLimit);
+      this._listen('/api/sources/search', fd);
+    },
+  };
+}
+</script>
+{% endblock %}

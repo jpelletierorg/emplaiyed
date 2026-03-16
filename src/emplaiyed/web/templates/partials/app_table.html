@@ -1,0 +1,93 @@
+{# Reusable application table partial.
+   Expects: applications (list of {app, opp, contact} dicts), show_score (bool) #}
+
+{% if applications %}
+<div class="overflow-x-auto">
+  <table class="table table-zebra">
+    <thead>
+      <tr>
+        <th>Company</th>
+        <th>Role</th>
+        <th>Location</th>
+        {% if show_score %}<th class="text-right">Score</th>{% endif %}
+        <th>Status</th>
+        <th>Contact</th>
+        <th class="text-right">Updated</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in applications %}
+      <tr class="hover cursor-pointer"
+          onclick="window.location='/applications/{{ item.app.id }}'">
+        <td class="font-medium">
+          {{ item.opp.company if item.opp else "?" }}
+          {% if item.opp and item.opp.short_id %}
+          <span class="badge badge-xs badge-primary badge-outline font-mono ml-1">{{ item.opp.short_id }}</span>
+          {% endif %}
+        </td>
+        <td>{{ item.opp.title if item.opp else "?" }}</td>
+        <td class="text-base-content/60">{{ item.opp.location or "-" if item.opp else "-" }}</td>
+        {% if show_score %}
+        <td class="text-right">
+          {% if item.app.score is not none %}
+          <span class="badge
+            {% if item.app.score >= 70 %}badge-success
+            {% elif item.app.score >= 40 %}badge-warning
+            {% else %}badge-error{% endif %}
+          ">{{ item.app.score }}</span>
+          {% else %}
+          <span class="text-base-content/30">-</span>
+          {% endif %}
+        </td>
+        {% endif %}
+        <td>
+          <span class="badge badge-sm badge-outline">{{ item.app.status.value }}</span>
+        </td>
+        <td class="text-xs" onclick="event.stopPropagation()">
+          {% if item.contact %}
+            <span class="badge badge-sm badge-success badge-outline">
+              {{ item.contact.name or item.contact.email or 'Contact found' }}
+            </span>
+          {% elif item.opp %}
+            <button
+              class="btn btn-xs btn-ghost"
+              hx-post="/api/contacts/{{ item.opp.id }}/extract/html"
+              hx-target="closest td"
+              hx-swap="innerHTML"
+              hx-indicator="closest tr"
+            >
+              Extract
+            </button>
+          {% else %}
+            <span class="text-base-content/30">-</span>
+          {% endif %}
+        </td>
+        <td class="text-right text-sm text-base-content/50">
+          {{ item.app.updated_at.strftime("%b %d, %H:%M") }}
+        </td>
+        <td>
+          {% if item.opp and item.opp.source_url %}
+          <a href="{{ item.opp.source_url }}" target="_blank" rel="noopener"
+             class="btn btn-ghost btn-xs"
+             onclick="event.stopPropagation()">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="text-center py-16 text-base-content/40">
+  <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto mb-4 opacity-30" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4" />
+  </svg>
+  <p class="text-lg">No applications in this stage</p>
+  <p class="text-sm mt-1">Run a scan or search to discover opportunities</p>
+</div>
+{% endif %}

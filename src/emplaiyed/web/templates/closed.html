@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+
+{% block title %}Closed - emplaiyed{% endblock %}
+
+{% block content %}
+<div class="max-w-6xl mx-auto">
+  <div class="flex items-center justify-between mb-6">
+    <h1 class="text-3xl font-bold">Closed</h1>
+    <span class="badge badge-lg badge-ghost">{{ applications|length }}</span>
+  </div>
+
+  <p class="text-base-content/60 mb-4">
+    Accepted, rejected, ghosted, or passed applications.
+  </p>
+
+  {% with show_score=true %}
+    {% include "partials/app_table.html" %}
+  {% endwith %}
+</div>
+{% endblock %}

@@ -40,6 +40,7 @@ from emplaiyed.profile.gap_analyzer import (
 # Helpers for scripting user input
 # ---------------------------------------------------------------------------
 
+
 class ScriptedIO:
     """Simulates user input from a pre-defined list of responses."""
 
@@ -63,6 +64,7 @@ class ScriptedIO:
 # ---------------------------------------------------------------------------
 # _merge_profiles tests
 # ---------------------------------------------------------------------------
+
 
 class TestMergeProfiles:
     def test_update_overwrites_scalars(self) -> None:
@@ -141,6 +143,7 @@ class TestMergeProfiles:
 # format_profile_summary tests
 # ---------------------------------------------------------------------------
 
+
 class TestFormatProfileSummary:
     def test_minimal_profile(self) -> None:
         p = Profile(name="Bob", email="bob@example.com")
@@ -196,6 +199,7 @@ class TestFormatProfileSummary:
 # _group_questions tests
 # ---------------------------------------------------------------------------
 
+
 class TestGroupQuestions:
     def test_empty_report_returns_no_groups(self) -> None:
         report = GapReport(gaps=[])
@@ -219,7 +223,9 @@ class TestGroupQuestions:
         report = GapReport(
             gaps=[
                 Gap("aspirations.target_roles", "roles", GapPriority.REQUIRED),
-                Gap("aspirations.work_arrangement", "arrangement", GapPriority.REQUIRED),
+                Gap(
+                    "aspirations.work_arrangement", "arrangement", GapPriority.REQUIRED
+                ),
                 Gap("aspirations.geographic_preferences", "geo", GapPriority.REQUIRED),
             ]
         )
@@ -246,6 +252,7 @@ class TestGroupQuestions:
 # build_profile integration tests
 # ---------------------------------------------------------------------------
 
+
 class TestBuildProfileWithCV:
     """Test the builder when the user provides a CV file."""
 
@@ -261,18 +268,22 @@ class TestBuildProfileWithCV:
 
         # Script: CV path, no corrections, then answer gap questions
         # TestModel returns default Profile values; gap questions follow
-        io = ScriptedIO([
-            str(cv_file),     # CV path
-            "no",             # no corrections
-            # The TestModel will fill in defaults, so gap questions depend on
-            # what TestModel produces. We provide generous answers for any gaps.
-            "Applied AI Engineer, remote, Montreal and Remote",
-            "minimum 90k, target 120k",
-            "Very urgent",
-            "Python, TypeScript, AWS, Docker",
-            "English native, French fluent",
-            "AWS Solutions Architect",
-        ])
+        io = ScriptedIO(
+            [
+                str(cv_file),  # CV path
+                "no",  # no corrections
+                # The TestModel will fill in defaults, so gap questions depend on
+                # what TestModel produces. We provide generous answers for any gaps.
+                "Applied AI Engineer, remote, Montreal and Remote",
+                "minimum 90k, target 120k",
+                "Very urgent",
+                "Python, TypeScript, AWS, Docker",
+                "English native, French fluent",
+                "AWS Solutions Architect",
+                "I want to build production AI systems that solve real problems.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -293,17 +304,21 @@ class TestBuildProfileWithCV:
         )
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            str(cv_file),             # CV path
-            "My name is actually Robert Smith",  # correction
-            # Gap-filling answers
-            "Staff Engineer, hybrid, Toronto",
-            "min 100k, target 140k",
-            "Within 3 months",
-            "Java, Spring, Kubernetes",
-            "English native",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                str(cv_file),  # CV path
+                "My name is actually Robert Smith",  # correction
+                # Gap-filling answers
+                "Staff Engineer, hybrid, Toronto",
+                "min 100k, target 140k",
+                "Within 3 months",
+                "Java, Spring, Kubernetes",
+                "English native",
+                "none",
+                "I want to lead distributed systems teams.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -319,18 +334,22 @@ class TestBuildProfileWithCV:
         """If the CV file doesn't exist, fall back to manual entry."""
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            "/nonexistent/resume.pdf",  # bad path
-            "Alice Wonder",             # name
-            "alice@example.com",        # email
-            # Gap-filling answers
-            "Data Scientist, remote, anywhere",
-            "min 80k, target 110k",
-            "Not urgent",
-            "Python, R, SQL",
-            "English fluent",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                "/nonexistent/resume.pdf",  # bad path
+                "Alice Wonder",  # name
+                "alice@example.com",  # email
+                # Gap-filling answers
+                "Data Scientist, remote, anywhere",
+                "min 80k, target 110k",
+                "Not urgent",
+                "Python, R, SQL",
+                "English fluent",
+                "none",
+                "I want to transition into data science.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -350,18 +369,22 @@ class TestBuildProfileNoCV:
         """User says 'no' to CV, builds profile from scratch."""
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            "no",                     # no CV
-            "Charlie Brown",          # name
-            "charlie@example.com",    # email
-            # Gap-filling answers
-            "Frontend Developer, on-site, New York",
-            "min 70k, target 95k",
-            "Somewhat urgent",
-            "React, TypeScript, CSS",
-            "English native",
-            "skip",
-        ])
+        io = ScriptedIO(
+            [
+                "no",  # no CV
+                "Charlie Brown",  # name
+                "charlie@example.com",  # email
+                # Gap-filling answers
+                "Frontend Developer, on-site, New York",
+                "min 70k, target 95k",
+                "Somewhat urgent",
+                "React, TypeScript, CSS",
+                "English native",
+                "skip",
+                "I want to build beautiful, accessible web apps.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -398,13 +421,17 @@ class TestBuildProfileIncremental:
         )
         save_profile(existing, profile_path)
 
-        # User skips CV, only answers nice-to-have gaps
-        io = ScriptedIO([
-            "no",                          # no CV
-            # Only nice-to-have gaps remain: languages, certifications
-            "English native, French fluent",
-            "AWS SAA",
-        ])
+        # User skips CV, only answers remaining gaps
+        io = ScriptedIO(
+            [
+                "no",  # no CV
+                # Remaining gaps: languages, certifications, career_statement, projects
+                "English native, French fluent",
+                "AWS SAA",
+                "I want to protect the world through technology.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -434,17 +461,21 @@ class TestBuildProfileIncremental:
             encoding="utf-8",
         )
 
-        io = ScriptedIO([
-            str(cv_file),     # CV path
-            "no",             # no corrections
-            # Gap-filling answers
-            "ML Engineer, hybrid, San Francisco",
-            "min 120k, target 160k",
-            "Urgent",
-            "Python, Rust, Docker, ML",
-            "English native",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                str(cv_file),  # CV path
+                "no",  # no corrections
+                # Gap-filling answers
+                "ML Engineer, hybrid, San Francisco",
+                "min 120k, target 160k",
+                "Urgent",
+                "Python, Rust, Docker, ML",
+                "English native",
+                "none",
+                "I want to push the boundaries of ML engineering.",
+                "none",
+            ]
+        )
 
         result = await build_profile(
             prompt_fn=io.prompt,
@@ -464,17 +495,21 @@ class TestBuildProfileOutput:
         """The builder should print a welcome message."""
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            "no",
-            "Test User",
-            "test@example.com",
-            "Engineer, remote, anywhere",
-            "min 80k, target 100k",
-            "Not urgent",
-            "Python",
-            "English",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                "no",
+                "Test User",
+                "test@example.com",
+                "Engineer, remote, anywhere",
+                "min 80k, target 100k",
+                "Not urgent",
+                "Python",
+                "English",
+                "none",
+                "I want to build great software.",
+                "none",
+            ]
+        )
 
         await build_profile(
             prompt_fn=io.prompt,
@@ -490,17 +525,21 @@ class TestBuildProfileOutput:
         """The builder should confirm where the profile was saved."""
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            "no",
-            "Test User",
-            "test@example.com",
-            "Engineer, remote, anywhere",
-            "min 80k, target 100k",
-            "Not urgent",
-            "Python",
-            "English",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                "no",
+                "Test User",
+                "test@example.com",
+                "Engineer, remote, anywhere",
+                "min 80k, target 100k",
+                "Not urgent",
+                "Python",
+                "English",
+                "none",
+                "I want to build great software.",
+                "none",
+            ]
+        )
 
         await build_profile(
             prompt_fn=io.prompt,
@@ -519,16 +558,20 @@ class TestBuildProfileOutput:
         cv_file.write_text("Jane Doe\njane@example.com", encoding="utf-8")
         profile_path = tmp_path / "profile.yaml"
 
-        io = ScriptedIO([
-            str(cv_file),
-            "no",
-            "Backend, remote, Montreal",
-            "min 90k, target 120k",
-            "Urgent",
-            "Python, Go",
-            "English, French",
-            "none",
-        ])
+        io = ScriptedIO(
+            [
+                str(cv_file),
+                "no",
+                "Backend, remote, Montreal",
+                "min 90k, target 120k",
+                "Urgent",
+                "Python, Go",
+                "English, French",
+                "none",
+                "I want to build backend systems at scale.",
+                "none",
+            ]
+        )
 
         await build_profile(
             prompt_fn=io.prompt,

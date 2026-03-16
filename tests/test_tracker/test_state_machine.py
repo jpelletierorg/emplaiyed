@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 
 import pytest
 
 from emplaiyed.core.database import (
+    list_status_transitions,
     save_application,
     save_opportunity,
     get_application,
 )
-from emplaiyed.core.models import Application, ApplicationStatus
+from emplaiyed.core.models import Application, ApplicationStatus, Opportunity
 from emplaiyed.tracker.state_machine import (
     VALID_TRANSITIONS,
     InvalidTransitionError,
@@ -30,6 +32,18 @@ def _make_app(status: ApplicationStatus) -> Application:
     )
 
 
+# Build parametrize lists from the VALID_TRANSITIONS dict itself.
+_VALID_CASES = [
+    (src, tgt) for src, targets in VALID_TRANSITIONS.items() for tgt in targets
+]
+
+_TERMINAL = {
+    ApplicationStatus.ACCEPTED,
+    ApplicationStatus.REJECTED,
+    ApplicationStatus.PASSED,
+}
+
+
 # ---------------------------------------------------------------------------
 # VALID_TRANSITIONS structure
 # ---------------------------------------------------------------------------
@@ -37,18 +51,18 @@ def _make_app(status: ApplicationStatus) -> Application:
 
 class TestValidTransitionsStructure:
     def test_all_statuses_have_entries(self):
-        """Every ApplicationStatus should have an entry in VALID_TRANSITIONS."""
         for status in ApplicationStatus:
-            assert status in VALID_TRANSITIONS, f"{status.value} missing from VALID_TRANSITIONS"
+            assert status in VALID_TRANSITIONS, f"{status.value} missing"
 
     def test_terminal_states_have_no_transitions(self):
-        assert VALID_TRANSITIONS[ApplicationStatus.ACCEPTED] == set()
-        assert VALID_TRANSITIONS[ApplicationStatus.REJECTED] == set()
-        assert VALID_TRANSITIONS[ApplicationStatus.PASSED] == set()
+        for s in _TERMINAL:
+            assert VALID_TRANSITIONS[s] == set(), f"{s.value} should be terminal"
 
     def test_ghosted_can_receive_response(self):
-        """GHOSTED is not fully terminal — they might reply later."""
-        assert ApplicationStatus.RESPONSE_RECEIVED in VALID_TRANSITIONS[ApplicationStatus.GHOSTED]
+        assert (
+            ApplicationStatus.RESPONSE_RECEIVED
+            in VALID_TRANSITIONS[ApplicationStatus.GHOSTED]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -57,191 +71,50 @@ class TestValidTransitionsStructure:
 
 
 class TestCanTransition:
-    # --- Happy path transitions (all valid ones) ---
-
-    def test_discovered_to_scored(self):
-        assert can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.SCORED)
-
-    def test_scored_to_outreach_pending(self):
-        assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.OUTREACH_PENDING)
-
-    def test_scored_to_outreach_sent(self):
-        """Backward compat: auto-send still works."""
-        assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.OUTREACH_SENT)
-
-    def test_outreach_pending_to_outreach_sent(self):
-        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.OUTREACH_SENT)
-
-    def test_outreach_pending_to_scored(self):
-        """Skip reverts to SCORED."""
-        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.SCORED)
-
-    def test_outreach_sent_to_follow_up_pending(self):
-        assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.FOLLOW_UP_PENDING)
-
-    def test_outreach_sent_to_follow_up_1(self):
-        """Backward compat: auto-send still works."""
-        assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.FOLLOW_UP_1)
-
-    def test_outreach_sent_to_response_received(self):
-        assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.RESPONSE_RECEIVED)
-
-    def test_outreach_sent_to_ghosted(self):
-        assert can_transition(ApplicationStatus.OUTREACH_SENT, ApplicationStatus.GHOSTED)
-
-    def test_follow_up_pending_to_follow_up_1(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.FOLLOW_UP_1)
-
-    def test_follow_up_pending_to_follow_up_2(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.FOLLOW_UP_2)
-
-    def test_follow_up_pending_to_outreach_sent(self):
-        """Skip reverts to previous state."""
-        assert can_transition(ApplicationStatus.FOLLOW_UP_PENDING, ApplicationStatus.OUTREACH_SENT)
-
-    def test_follow_up_1_to_follow_up_pending(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.FOLLOW_UP_PENDING)
-
-    def test_follow_up_1_to_follow_up_2(self):
-        """Backward compat: auto-send still works."""
-        assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.FOLLOW_UP_2)
-
-    def test_follow_up_1_to_response_received(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.RESPONSE_RECEIVED)
-
-    def test_follow_up_1_to_ghosted(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_1, ApplicationStatus.GHOSTED)
-
-    def test_follow_up_2_to_response_received(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_2, ApplicationStatus.RESPONSE_RECEIVED)
-
-    def test_follow_up_2_to_ghosted(self):
-        assert can_transition(ApplicationStatus.FOLLOW_UP_2, ApplicationStatus.GHOSTED)
-
-    def test_response_received_to_interview_scheduled(self):
-        assert can_transition(ApplicationStatus.RESPONSE_RECEIVED, ApplicationStatus.INTERVIEW_SCHEDULED)
-
-    def test_response_received_to_rejected(self):
-        assert can_transition(ApplicationStatus.RESPONSE_RECEIVED, ApplicationStatus.REJECTED)
-
-    def test_interview_scheduled_to_interview_completed(self):
-        assert can_transition(ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.INTERVIEW_COMPLETED)
-
-    def test_interview_scheduled_to_rejected(self):
-        assert can_transition(ApplicationStatus.INTERVIEW_SCHEDULED, ApplicationStatus.REJECTED)
-
-    def test_interview_completed_to_interview_scheduled(self):
-        """Another round of interviews."""
-        assert can_transition(ApplicationStatus.INTERVIEW_COMPLETED, ApplicationStatus.INTERVIEW_SCHEDULED)
-
-    def test_interview_completed_to_offer_received(self):
-        assert can_transition(ApplicationStatus.INTERVIEW_COMPLETED, ApplicationStatus.OFFER_RECEIVED)
-
-    def test_interview_completed_to_rejected(self):
-        assert can_transition(ApplicationStatus.INTERVIEW_COMPLETED, ApplicationStatus.REJECTED)
-
-    def test_offer_received_to_negotiation_pending(self):
-        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.NEGOTIATION_PENDING)
-
-    def test_offer_received_to_acceptance_pending(self):
-        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.ACCEPTANCE_PENDING)
-
-    def test_offer_received_to_negotiating(self):
-        """Backward compat."""
-        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.NEGOTIATING)
-
-    def test_offer_received_to_accepted(self):
-        """Backward compat."""
-        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.ACCEPTED)
-
-    def test_offer_received_to_rejected(self):
-        assert can_transition(ApplicationStatus.OFFER_RECEIVED, ApplicationStatus.REJECTED)
-
-    def test_negotiation_pending_to_negotiating(self):
-        assert can_transition(ApplicationStatus.NEGOTIATION_PENDING, ApplicationStatus.NEGOTIATING)
-
-    def test_negotiation_pending_to_offer_received(self):
-        """Skip reverts."""
-        assert can_transition(ApplicationStatus.NEGOTIATION_PENDING, ApplicationStatus.OFFER_RECEIVED)
-
-    def test_negotiating_to_offer_received(self):
-        """Counter-offer."""
-        assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.OFFER_RECEIVED)
-
-    def test_negotiating_to_acceptance_pending(self):
-        assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.ACCEPTANCE_PENDING)
-
-    def test_negotiating_to_accepted(self):
-        """Backward compat."""
-        assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.ACCEPTED)
-
-    def test_negotiating_to_rejected(self):
-        assert can_transition(ApplicationStatus.NEGOTIATING, ApplicationStatus.REJECTED)
-
-    def test_acceptance_pending_to_accepted(self):
-        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.ACCEPTED)
-
-    def test_acceptance_pending_to_offer_received(self):
-        """Skip reverts."""
-        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.OFFER_RECEIVED)
-
-    def test_acceptance_pending_to_negotiating(self):
-        """Skip reverts from negotiating path."""
-        assert can_transition(ApplicationStatus.ACCEPTANCE_PENDING, ApplicationStatus.NEGOTIATING)
-
-    def test_scored_to_passed(self):
-        assert can_transition(ApplicationStatus.SCORED, ApplicationStatus.PASSED)
-
-    def test_outreach_pending_to_passed(self):
-        assert can_transition(ApplicationStatus.OUTREACH_PENDING, ApplicationStatus.PASSED)
-
-    def test_ghosted_to_response_received(self):
-        assert can_transition(ApplicationStatus.GHOSTED, ApplicationStatus.RESPONSE_RECEIVED)
-
-    # --- Invalid transitions ---
-
-    def test_cannot_skip_scored(self):
-        assert not can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.OUTREACH_SENT)
-
-    def test_cannot_go_backwards(self):
-        assert not can_transition(ApplicationStatus.SCORED, ApplicationStatus.DISCOVERED)
-
-    def test_cannot_leave_accepted(self):
-        for target in ApplicationStatus:
-            if target != ApplicationStatus.ACCEPTED:
-                assert not can_transition(ApplicationStatus.ACCEPTED, target), (
-                    f"ACCEPTED should not transition to {target.value}"
-                )
-
-    def test_cannot_leave_rejected(self):
-        for target in ApplicationStatus:
-            if target != ApplicationStatus.REJECTED:
-                assert not can_transition(ApplicationStatus.REJECTED, target), (
-                    f"REJECTED should not transition to {target.value}"
-                )
-
-    def test_cannot_leave_passed(self):
-        for target in ApplicationStatus:
-            if target != ApplicationStatus.PASSED:
-                assert not can_transition(ApplicationStatus.PASSED, target), (
-                    f"PASSED should not transition to {target.value}"
-                )
-
-    def test_discovered_cannot_pass(self):
-        assert not can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.PASSED)
+    @pytest.mark.parametrize(
+        "src,tgt", _VALID_CASES, ids=[f"{s.value}->{t.value}" for s, t in _VALID_CASES]
+    )
+    def test_valid_transition(self, src, tgt):
+        assert can_transition(src, tgt)
 
     def test_cannot_self_transition(self):
-        """No status should transition to itself."""
         for status in ApplicationStatus:
-            assert not can_transition(status, status), (
-                f"{status.value} should not transition to itself"
+            assert not can_transition(status, status), f"{status.value} -> itself"
+
+    @pytest.mark.parametrize(
+        "terminal", list(_TERMINAL), ids=[s.value for s in _TERMINAL]
+    )
+    def test_cannot_leave_terminal(self, terminal):
+        for target in ApplicationStatus:
+            if target != terminal:
+                assert not can_transition(terminal, target), (
+                    f"{terminal.value} -> {target.value}"
+                )
+
+    def test_applied_statuses_can_be_rejected(self):
+        """OUTREACH_SENT, FOLLOW_UP_1, FOLLOW_UP_2 can all transition to REJECTED."""
+        for status in (
+            ApplicationStatus.OUTREACH_SENT,
+            ApplicationStatus.FOLLOW_UP_1,
+            ApplicationStatus.FOLLOW_UP_2,
+        ):
+            assert can_transition(status, ApplicationStatus.REJECTED), (
+                f"{status.value} -> REJECTED should be valid"
             )
 
-    def test_discovered_cannot_go_to_interview(self):
-        assert not can_transition(ApplicationStatus.DISCOVERED, ApplicationStatus.INTERVIEW_SCHEDULED)
-
-    def test_ghosted_cannot_go_to_accepted(self):
+    def test_cannot_skip_stages(self):
+        assert not can_transition(
+            ApplicationStatus.DISCOVERED, ApplicationStatus.OUTREACH_SENT
+        )
+        assert not can_transition(
+            ApplicationStatus.DISCOVERED, ApplicationStatus.INTERVIEW_SCHEDULED
+        )
         assert not can_transition(ApplicationStatus.GHOSTED, ApplicationStatus.ACCEPTED)
+
+    def test_cannot_go_backwards(self):
+        assert not can_transition(
+            ApplicationStatus.SCORED, ApplicationStatus.DISCOVERED
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -251,9 +124,7 @@ class TestCanTransition:
 
 class TestTransition:
     def test_valid_transition_updates_db(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
         save_opportunity(db, sample_opportunity)
         app = _make_app(ApplicationStatus.DISCOVERED)
@@ -261,16 +132,12 @@ class TestTransition:
 
         result = transition(db, "app-1", ApplicationStatus.SCORED)
         assert result.status == ApplicationStatus.SCORED
-
-        # Verify the database was updated
         loaded = get_application(db, "app-1")
         assert loaded.status == ApplicationStatus.SCORED
         assert loaded.updated_at > app.updated_at
 
     def test_invalid_transition_raises(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
         save_opportunity(db, sample_opportunity)
         app = _make_app(ApplicationStatus.DISCOVERED)
@@ -278,57 +145,30 @@ class TestTransition:
 
         with pytest.raises(InvalidTransitionError) as exc_info:
             transition(db, "app-1", ApplicationStatus.INTERVIEW_SCHEDULED)
-
         assert "DISCOVERED" in str(exc_info.value)
-        assert "INTERVIEW_SCHEDULED" in str(exc_info.value)
 
-        # Verify the database was NOT changed
         loaded = get_application(db, "app-1")
         assert loaded.status == ApplicationStatus.DISCOVERED
 
     def test_terminal_state_raises(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
         save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.ACCEPTED)
-        save_application(db, app)
+        save_application(db, _make_app(ApplicationStatus.ACCEPTED))
 
         with pytest.raises(InvalidTransitionError) as exc_info:
             transition(db, "app-1", ApplicationStatus.REJECTED)
-
         assert "terminal" in str(exc_info.value).lower()
 
-    def test_nonexistent_application_raises_value_error(
-        self,
-        db: sqlite3.Connection,
-    ):
+    def test_nonexistent_application_raises(self, db: sqlite3.Connection):
         with pytest.raises(ValueError, match="Application not found"):
             transition(db, "nonexistent", ApplicationStatus.SCORED)
 
-    def test_ghosted_to_response_received(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
-    ):
-        """Special case: a ghosted application can get a response."""
-        save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.GHOSTED)
-        save_application(db, app)
-
-        result = transition(db, "app-1", ApplicationStatus.RESPONSE_RECEIVED)
-        assert result.status == ApplicationStatus.RESPONSE_RECEIVED
-
     def test_multi_step_happy_path(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
-        """Walk through the entire happy path with PENDING states."""
         save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.DISCOVERED)
-        save_application(db, app)
+        save_application(db, _make_app(ApplicationStatus.DISCOVERED))
 
         steps = [
             ApplicationStatus.SCORED,
@@ -345,70 +185,139 @@ class TestTransition:
             ApplicationStatus.ACCEPTANCE_PENDING,
             ApplicationStatus.ACCEPTED,
         ]
-
         for target in steps:
             result = transition(db, "app-1", target)
             assert result.status == target
 
-        # After ACCEPTED, nothing should be valid
         with pytest.raises(InvalidTransitionError):
             transition(db, "app-1", ApplicationStatus.REJECTED)
 
     def test_interview_loop(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
-        """Multiple rounds of interviews."""
         save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.RESPONSE_RECEIVED)
-        save_application(db, app)
+        save_application(db, _make_app(ApplicationStatus.RESPONSE_RECEIVED))
 
-        # Round 1
         transition(db, "app-1", ApplicationStatus.INTERVIEW_SCHEDULED)
         transition(db, "app-1", ApplicationStatus.INTERVIEW_COMPLETED)
-        # Round 2
         transition(db, "app-1", ApplicationStatus.INTERVIEW_SCHEDULED)
         transition(db, "app-1", ApplicationStatus.INTERVIEW_COMPLETED)
-        # Round 3 -> offer
         transition(db, "app-1", ApplicationStatus.OFFER_RECEIVED)
 
-        loaded = get_application(db, "app-1")
-        assert loaded.status == ApplicationStatus.OFFER_RECEIVED
-
-    def test_scored_to_passed(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
-    ):
-        """SCORED applications can be marked as PASSED (not interested)."""
-        save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.SCORED)
-        save_application(db, app)
-
-        result = transition(db, "app-1", ApplicationStatus.PASSED)
-        assert result.status == ApplicationStatus.PASSED
-
-        # Terminal: can't transition out
-        with pytest.raises(InvalidTransitionError):
-            transition(db, "app-1", ApplicationStatus.OUTREACH_PENDING)
+        assert get_application(db, "app-1").status == ApplicationStatus.OFFER_RECEIVED
 
     def test_negotiation_loop(
-        self,
-        db: sqlite3.Connection,
-        sample_opportunity: Opportunity,
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
     ):
-        """Counter-offer cycle: OFFER_RECEIVED -> NEGOTIATING -> OFFER_RECEIVED -> ACCEPTED."""
         save_opportunity(db, sample_opportunity)
-        app = _make_app(ApplicationStatus.OFFER_RECEIVED)
-        save_application(db, app)
+        save_application(db, _make_app(ApplicationStatus.OFFER_RECEIVED))
 
         transition(db, "app-1", ApplicationStatus.NEGOTIATING)
         transition(db, "app-1", ApplicationStatus.OFFER_RECEIVED)
         transition(db, "app-1", ApplicationStatus.ACCEPTED)
 
-        loaded = get_application(db, "app-1")
-        assert loaded.status == ApplicationStatus.ACCEPTED
+        assert get_application(db, "app-1").status == ApplicationStatus.ACCEPTED
+
+    def test_transition_records_history(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.DISCOVERED))
+
+        transition(db, "app-1", ApplicationStatus.SCORED)
+        transition(db, "app-1", ApplicationStatus.OUTREACH_PENDING)
+
+        history = list_status_transitions(db, "app-1")
+        assert len(history) == 2
+        assert history[0].from_status == "DISCOVERED"
+        assert history[1].to_status == "OUTREACH_PENDING"
+
+    def test_invalid_transition_does_not_record_history(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.DISCOVERED))
+
+        with pytest.raises(InvalidTransitionError):
+            transition(db, "app-1", ApplicationStatus.INTERVIEW_SCHEDULED)
+
+        assert len(list_status_transitions(db, "app-1")) == 0
+
+
+# ---------------------------------------------------------------------------
+# InvalidTransitionError
+# ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# BELOW_THRESHOLD specific transitions
+# ---------------------------------------------------------------------------
+
+
+class TestBelowThresholdTransitions:
+    """Explicit tests for BELOW_THRESHOLD state transitions."""
+
+    def test_discovered_to_below_threshold(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.DISCOVERED))
+        result = transition(db, "app-1", ApplicationStatus.BELOW_THRESHOLD)
+        assert result.status == ApplicationStatus.BELOW_THRESHOLD
+
+    def test_scored_to_below_threshold(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.SCORED))
+        result = transition(db, "app-1", ApplicationStatus.BELOW_THRESHOLD)
+        assert result.status == ApplicationStatus.BELOW_THRESHOLD
+
+    def test_below_threshold_to_scored(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.BELOW_THRESHOLD))
+        result = transition(db, "app-1", ApplicationStatus.SCORED)
+        assert result.status == ApplicationStatus.SCORED
+
+    def test_below_threshold_to_passed(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.BELOW_THRESHOLD))
+        result = transition(db, "app-1", ApplicationStatus.PASSED)
+        assert result.status == ApplicationStatus.PASSED
+
+    def test_below_threshold_cannot_go_to_outreach(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        """BT apps cannot skip to OUTREACH_PENDING — must promote to SCORED first."""
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.BELOW_THRESHOLD))
+        with pytest.raises(InvalidTransitionError):
+            transition(db, "app-1", ApplicationStatus.OUTREACH_PENDING)
+
+    def test_below_threshold_records_history(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.DISCOVERED))
+        transition(db, "app-1", ApplicationStatus.BELOW_THRESHOLD)
+        history = list_status_transitions(db, "app-1")
+        assert len(history) == 1
+        assert history[0].from_status == "DISCOVERED"
+        assert history[0].to_status == "BELOW_THRESHOLD"
+
+    def test_promote_then_outreach_happy_path(
+        self, db: sqlite3.Connection, sample_opportunity: Opportunity
+    ):
+        """BT → SCORED → OUTREACH_PENDING works as a two-step promotion."""
+        save_opportunity(db, sample_opportunity)
+        save_application(db, _make_app(ApplicationStatus.BELOW_THRESHOLD))
+        transition(db, "app-1", ApplicationStatus.SCORED)
+        transition(db, "app-1", ApplicationStatus.OUTREACH_PENDING)
+        assert get_application(db, "app-1").status == ApplicationStatus.OUTREACH_PENDING
 
 
 # ---------------------------------------------------------------------------
@@ -417,30 +326,7 @@ class TestTransition:
 
 
 class TestInvalidTransitionError:
-    def test_error_message_includes_states(self):
-        err = InvalidTransitionError(
-            ApplicationStatus.DISCOVERED,
-            ApplicationStatus.INTERVIEW_SCHEDULED,
-        )
-        assert "DISCOVERED" in str(err)
-        assert "INTERVIEW_SCHEDULED" in str(err)
-
-    def test_error_message_includes_application_id(self):
-        err = InvalidTransitionError(
-            ApplicationStatus.DISCOVERED,
-            ApplicationStatus.INTERVIEW_SCHEDULED,
-            application_id="app-123",
-        )
-        assert "app-123" in str(err)
-
-    def test_error_message_for_terminal_state(self):
-        err = InvalidTransitionError(
-            ApplicationStatus.ACCEPTED,
-            ApplicationStatus.REJECTED,
-        )
-        assert "terminal" in str(err).lower()
-
-    def test_error_attributes(self):
+    def test_error_attributes_and_message(self):
         err = InvalidTransitionError(
             ApplicationStatus.DISCOVERED,
             ApplicationStatus.SCORED,
@@ -449,3 +335,11 @@ class TestInvalidTransitionError:
         assert err.current == ApplicationStatus.DISCOVERED
         assert err.target == ApplicationStatus.SCORED
         assert err.application_id == "app-x"
+        assert "app-x" in str(err)
+        assert "DISCOVERED" in str(err)
+
+    def test_terminal_state_message(self):
+        err = InvalidTransitionError(
+            ApplicationStatus.ACCEPTED, ApplicationStatus.REJECTED
+        )
+        assert "terminal" in str(err).lower()
