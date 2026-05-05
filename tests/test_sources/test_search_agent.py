@@ -12,10 +12,15 @@ from emplaiyed.sources.base import BaseSource, SearchQuery
 from emplaiyed.sources.search_agent import (
     SearchDeps,
     SearchResult,
+    _active_search_sources,
     _basic_filter,
     _build_search_prompt,
+    _format_source_stats,
+    _normalise_keywords,
+    _source_stats,
     agentic_search,
     reject_opportunities,
+    search_jobs,
 )
 
 
@@ -42,6 +47,17 @@ class StubSource(BaseSource):
 
     async def scrape(self, query: SearchQuery) -> list[Opportunity]:
         raise NotImplementedError("Not implemented")
+
+
+class ManualLikeSource(BaseSource):
+    """A no-op source matching the manual source name."""
+
+    @property
+    def name(self) -> str:
+        return "manual"
+
+    async def scrape(self, query: SearchQuery) -> list[Opportunity]:
+        return []
 
 
 def _make_profile(**kwargs) -> Profile:
@@ -155,6 +171,14 @@ class TestBasicFilter:
         assert _basic_filter(opp, profile) is False
 
 
+class TestNormaliseKeywords:
+    def test_removes_empty_terms(self):
+        assert _normalise_keywords(["", "  ", "AI Engineer", " Python "]) == [
+            "AI Engineer",
+            "Python",
+        ]
+
+
 # --- Unit tests for _build_search_prompt ---
 
 
@@ -172,6 +196,10 @@ class TestBuildSearchPrompt:
         prompt = _build_search_prompt(_make_profile(), ["jobbank", "jobillico"])
         assert "jobbank" in prompt
         assert "jobillico" in prompt
+
+    def test_tells_agent_to_cover_each_source(self):
+        prompt = _build_search_prompt(_make_profile(), ["jobbank", "jobillico"])
+        assert "Search each available source at least once" in prompt
 
     def test_includes_excluded_industries(self):
         profile = _make_profile(
@@ -277,6 +305,50 @@ class TestAgenticSearch:
         )
 
         assert isinstance(result, SearchResult)
+
+    def test_active_sources_excludes_manual(self):
+        sources = {
+            "manual": ManualLikeSource(),
+            "fake": FakeSource(),
+        }
+
+        active = _active_search_sources(sources)
+
+        assert "manual" not in active
+        assert "fake" in active
+
+    def test_source_stats_format(self):
+        deps = SearchDeps(profile=_make_profile(), sources={"fake": FakeSource()})
+        deps.source_attempts["fake"] = 2
+        deps.source_raw_counts["fake"] = 5
+        deps.source_kept_counts["fake"] = 3
+
+        stats = _source_stats(deps)
+
+        assert stats["fake"] == {
+            "attempts": 2,
+            "raw": 5,
+            "kept": 3,
+            "errors": 0,
+        }
+        assert "fake: 3 kept / 5 raw" in _format_source_stats(stats)
+
+    async def test_search_jobs_rejects_empty_keywords(self):
+        from unittest.mock import MagicMock
+
+        deps = SearchDeps(
+            profile=_make_profile(),
+            sources={"fake": FakeSource([_make_opp("AI Engineer", "Acme")])},
+        )
+        ctx = MagicMock()
+        ctx.deps = deps
+
+        result = await search_jobs(ctx, ["", "   "], "fake", "Montreal")
+
+        assert "No keywords provided" in result
+        assert deps.source_attempts["fake"] == 1
+        assert deps.source_raw_counts.get("fake", 0) == 0
+        assert deps.found == []
 
 
 class TestRejectOpportunities:

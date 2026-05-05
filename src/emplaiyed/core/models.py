@@ -294,3 +294,44 @@ class WorkItem(BaseModel):
     previous_status: str  # ApplicationStatus value to revert to on "skip"
     created_at: datetime
     completed_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Apply Runs (autonomous browser-based application submission)
+# ---------------------------------------------------------------------------
+
+
+class ApplyRunStatus(str, enum.Enum):
+    QUEUED = "QUEUED"
+    GENERATING_ASSETS = "GENERATING_ASSETS"
+    NAVIGATING = "NAVIGATING"
+    DETECTING_PORTAL = "DETECTING_PORTAL"
+    FILLING = "FILLING"
+    UPLOADING = "UPLOADING"
+    SUBMITTING = "SUBMITTING"
+    SUCCEEDED = "SUCCEEDED"
+    BLOCKED = "BLOCKED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class PortalKind(str, enum.Enum):
+    GREENHOUSE = "GREENHOUSE"
+    LEVER = "LEVER"
+    ASHBY = "ASHBY"
+    GENERIC = "GENERIC"
+    UNKNOWN = "UNKNOWN"
+
+
+class ApplyRun(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid4()))
+    application_id: str
+    status: ApplyRunStatus = ApplyRunStatus.QUEUED
+    portal_kind: PortalKind = PortalKind.UNKNOWN
+    current_url: str | None = None
+    last_step: str | None = None
+    error_message: str | None = None
+    artifact_dir: str | None = None
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None

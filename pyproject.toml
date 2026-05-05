@@ -26,6 +26,8 @@ dependencies = [
     "python-jobspy>=1.1.80",
     "imapclient>=3.0",
     "html2text>=2024.2",
+    "playwright>=1.40",
+    "browser-use-sdk>=0.1",
 ]
 
 [project.scripts]

@@ -17,5 +17,12 @@ wheels/
 # Runtime data
 data/
 
+# Browser session data
+data/browser_sessions/
+
+# Local tool output
+.opencode/
+.playwright-cli/
+
 # OS
 .DS_Store

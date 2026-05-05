@@ -7,6 +7,7 @@ import logging
 from typing import Optional
 
 import typer
+from rich.markup import escape
 from rich.table import Table
 
 from emplaiyed.cli import console, try_load_profile
@@ -229,7 +230,7 @@ def search(
     sources = get_available_sources()
 
     def _progress(msg: str) -> None:
-        console.print(f"  [dim]{msg}[/dim]")
+        console.print(f"  [dim]{escape(msg)}[/dim]")
 
     db_conn = init_db(get_default_db_path())
     try:

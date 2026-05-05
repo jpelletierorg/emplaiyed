@@ -28,7 +28,7 @@ from emplaiyed.sources.location_filter import filter_by_location
 
 logger = logging.getLogger(__name__)
 
-from emplaiyed.llm.config import SEARCH_MODEL
+from emplaiyed.llm.config import SEARCH_MAX_TOKENS, SEARCH_MODEL
 
 DEFAULT_TIME_LIMIT = 300  # 5 minutes
 
@@ -44,6 +44,10 @@ class SearchDeps:
     found: list[Opportunity] = field(default_factory=list)
     seen_keys: set[tuple[str, str, str]] = field(default_factory=set)
     queries_tried: list[str] = field(default_factory=list)
+    source_attempts: dict[str, int] = field(default_factory=dict)
+    source_raw_counts: dict[str, int] = field(default_factory=dict)
+    source_kept_counts: dict[str, int] = field(default_factory=dict)
+    source_error_counts: dict[str, int] = field(default_factory=dict)
     db_conn: sqlite3.Connection | None = None
     on_progress: Callable[[str], None] | None = None
     _model_override: Model | None = None
@@ -54,6 +58,7 @@ class SearchResult(BaseModel):
 
     opportunities: list[Opportunity] = Field(default_factory=list)
     queries_used: list[str] = Field(default_factory=list)
+    source_stats: dict[str, dict[str, int]] = Field(default_factory=dict)
     summary: str = ""
 
 
@@ -77,14 +82,17 @@ search_agent = Agent(
         "a location parameter.\n"
         "4. Call search_jobs for each query. After each call, REVIEW the results "
         "against the user's criteria.\n"
-        "5. Call reject_opportunities to remove any results that violate the "
+        "5. Search every available source at least once before repeating any "
+        "source, unless the source has already failed. Do not search manual; it "
+        "is not an active job board.\n"
+        "6. Call reject_opportunities to remove any results that violate the "
         "user's direction (wrong industry, wrong role type, etc.).\n"
-        "6. If a query returns few results (<3), try a broader or alternative query.\n"
-        "7. If you get many duplicates, switch to a completely different angle.\n"
-        "8. Try queries in both English and French (the user is in Quebec).\n"
-        "9. The tool will tell you how much time is left. When time is almost up, "
+        "7. If a query returns few results (<3), try a broader or alternative query.\n"
+        "8. If you get many duplicates, switch to a completely different angle.\n"
+        "9. Try queries in both English and French (the user is in Quebec).\n"
+        "10. The tool will tell you how much time is left. When time is almost up, "
         "stop searching and return your results.\n"
-        "10. Return ALL kept opportunities with a summary of your search strategy.\n\n"
+        "11. Return ALL kept opportunities with a summary of your search strategy.\n\n"
         "Available sources will be listed in the profile information. "
         "Do NOT keep opportunities that are clearly irrelevant to the profile "
         "(e.g. junior roles for a senior candidate) or that violate the user's "
@@ -103,7 +111,7 @@ async def search_jobs(
     """Search a job source for opportunities matching the given keywords.
 
     Args:
-        keywords: Search terms, e.g. ["cloud architect", "AWS"].
+        keywords: Non-empty search terms, e.g. ["cloud architect", "AWS"].
         source_name: Which source to search. Check profile info for available sources.
         location: Optional location filter, e.g. "Montreal, QC".
     """
@@ -127,16 +135,24 @@ async def search_jobs(
         _emit(msg)
         return msg
 
-    query = SearchQuery(keywords=keywords, location=location, max_results=25)
-    query_desc = f"{', '.join(keywords)} on {source_name}"
+    clean_keywords = _normalise_keywords(keywords)
+    if not clean_keywords:
+        deps.source_attempts[source_name] = deps.source_attempts.get(source_name, 0) + 1
+        msg = f"No keywords provided for {source_name}. Retry with specific role or skill terms."
+        _emit(f"  {msg}")
+        return msg
+
+    query = SearchQuery(keywords=clean_keywords, location=location, max_results=25)
+    query_desc = f"{', '.join(clean_keywords)} on {source_name}"
     deps.queries_tried.append(query_desc)
+    deps.source_attempts[source_name] = deps.source_attempts.get(source_name, 0) + 1
 
     mins_left = int(remaining // 60)
     secs_left = int(remaining % 60)
     loc_str = f" in {location}" if location else ""
     _emit(
         f"[{mins_left}m{secs_left:02d}s left] "
-        f"Searching {source_name} for: [{', '.join(keywords)}]{loc_str}"
+        f"Searching {source_name} for: [{', '.join(clean_keywords)}]{loc_str}"
     )
 
     try:
@@ -146,8 +162,11 @@ async def search_jobs(
         return f"Source '{source_name}' is not yet implemented."
     except Exception as exc:
         logger.warning("Search failed for '%s': %s", query_desc, exc)
+        deps.source_error_counts[source_name] = deps.source_error_counts.get(source_name, 0) + 1
         _emit(f"  Search failed: {exc}")
         return f"Search failed: {exc}. Try different keywords or source."
+
+    deps.source_raw_counts[source_name] = deps.source_raw_counts.get(source_name, 0) + len(results)
 
     # Dedup and basic filter
     pre_filter: list[Opportunity] = []
@@ -187,6 +206,7 @@ async def search_jobs(
         deps.found.append(opp)
         if deps.db_conn is not None:
             _persist_opportunity(deps.db_conn, opp)
+    deps.source_kept_counts[source_name] = deps.source_kept_counts.get(source_name, 0) + len(new_opps)
 
     if not new_opps:
         detail = []
@@ -334,6 +354,11 @@ def _basic_filter(opp: Opportunity, profile: Profile) -> bool:
     return True
 
 
+def _normalise_keywords(keywords: list[str]) -> list[str]:
+    """Remove empty keyword terms before a source receives a query."""
+    return [str(keyword).strip() for keyword in keywords if str(keyword).strip()]
+
+
 def _build_search_prompt(profile: Profile, available_sources: list[str]) -> str:
     """Build the initial prompt from the user's profile."""
     parts = ["Find jobs for this candidate:\n"]
@@ -382,8 +407,49 @@ def _build_search_prompt(profile: Profile, available_sources: list[str]) -> str:
         parts.append(f"Certifications: {', '.join(cert_names)}")
 
     parts.append(f"\nAvailable sources to search: {', '.join(available_sources)}")
+    parts.append("Search each available source at least once before repeating a source.")
 
     return "\n".join(parts)
+
+
+def _active_search_sources(sources: dict[str, BaseSource]) -> dict[str, BaseSource]:
+    """Return sources usable by agentic search."""
+    active_sources = {}
+    for name, src in sources.items():
+        if name == "manual":
+            continue
+        if hasattr(src, "scrape"):
+            active_sources[name] = src
+    return active_sources
+
+
+def _source_stats(deps: SearchDeps) -> dict[str, dict[str, int]]:
+    """Build a serializable source diagnostics summary."""
+    names = set(deps.sources.keys())
+    names.update(deps.source_attempts)
+    names.update(deps.source_raw_counts)
+    names.update(deps.source_kept_counts)
+    names.update(deps.source_error_counts)
+    return {
+        name: {
+            "attempts": deps.source_attempts.get(name, 0),
+            "raw": deps.source_raw_counts.get(name, 0),
+            "kept": deps.source_kept_counts.get(name, 0),
+            "errors": deps.source_error_counts.get(name, 0),
+        }
+        for name in sorted(names)
+    }
+
+
+def _format_source_stats(stats: dict[str, dict[str, int]]) -> str:
+    """Format source diagnostics for CLI/SSE progress."""
+    parts = []
+    for name, values in stats.items():
+        parts.append(
+            f"{name}: {values['kept']} kept / {values['raw']} raw "
+            f"({values['attempts']} searches, {values['errors']} errors)"
+        )
+    return "; ".join(parts)
 
 
 async def agentic_search(
@@ -412,11 +478,7 @@ async def agentic_search(
     """
     _emit = on_progress or (lambda _: None)
 
-    # Filter out sources that are stubs
-    active_sources = {}
-    for name, src in sources.items():
-        if hasattr(src, "scrape"):
-            active_sources[name] = src
+    active_sources = _active_search_sources(sources)
 
     _emit(f"Active sources: {', '.join(active_sources.keys())}")
     _emit(f"Time limit: {time_limit // 60}m{time_limit % 60:02d}s")
@@ -466,6 +528,7 @@ async def agentic_search(
             deps=deps,
             usage_limits=UsageLimits(request_limit=50),
             model=model,
+            model_settings={"max_tokens": SEARCH_MAX_TOKENS},
         )
         output = result.output
     except UsageLimitExceeded:
@@ -475,8 +538,11 @@ async def agentic_search(
     # Ground truth is in deps, not the agent's structured output
     output.opportunities = deps.found
     output.queries_used = deps.queries_tried
+    output.source_stats = _source_stats(deps)
 
     elapsed = time.monotonic() - deps.start_time
+    if output.source_stats:
+        _emit(f"Source summary: {_format_source_stats(output.source_stats)}")
     _emit(
         f"Done — {len(output.opportunities)} opportunities found "
         f"across {len(output.queries_used)} queries "

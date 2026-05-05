@@ -20,6 +20,7 @@ from emplaiyed.console.funnel_stats import compute_funnel
 from emplaiyed.console.stages import STAGE_GROUPS, STAGE_TAB_ORDER
 from emplaiyed.core.database import (
     delete_application,
+    get_active_apply_run,
     get_application,
     get_default_db_path,
     get_opportunity,
@@ -31,12 +32,15 @@ from emplaiyed.core.database import (
     list_pending_work_items,
     list_status_transitions,
     reclassify_threshold_apps,
+    save_apply_run,
     save_event,
     save_interaction,
 )
 from emplaiyed.core.models import (
     Application,
     ApplicationStatus,
+    ApplyRun,
+    ApplyRunStatus,
     Interaction,
     InteractionType,
     ScheduledEvent,
@@ -63,6 +67,7 @@ _TAB_ACTIONS: dict[str, set[str]] = {
         "talk",
         "generate",
         "toggle_below_threshold",
+        "apply",
     },
     "Applied": {
         "cursor_down",
@@ -155,6 +160,7 @@ class WorkConsoleApp(App):
         Binding("t", "talk", "Chat", show=True),
         Binding("z", "delete_application", "Delete", show=True),
         Binding("b", "toggle_below_threshold", "Below threshold", show=True),
+        Binding("w", "apply", "Auto-apply", show=True),
         Binding("slash", "search", "Search", show=True),
         Binding("q", "quit", "Quit", show=True),
     ]
@@ -166,6 +172,7 @@ class WorkConsoleApp(App):
         self._queue_apps: list[Application] = []
         self._tab_apps: dict[str, list[Application]] = {}
         self._generating: set[str] = set()
+        self._applying: set[str] = set()  # app IDs with active apply runs
         self._closing = False
         self._show_below_threshold = False
 
@@ -236,6 +243,8 @@ class WorkConsoleApp(App):
             label = f"{opp.company} — {opp.title}" if opp else app.id
             if app.status == ApplicationStatus.BELOW_THRESHOLD:
                 label = f"[BT] {label}"
+            if app.id in self._applying:
+                label = f"[APPLYING] {label}"
             option_list.add_option(Option(label, id=app.id))
         option_list.highlighted = 0
         self._show_queue_detail(0)
@@ -367,6 +376,17 @@ class WorkConsoleApp(App):
             lines.append("Assets: Generating...")
         else:
             lines.append("Assets: Not generated (g to generate)")
+
+        # Apply run status
+        if app.id in self._applying:
+            run = get_active_apply_run(self._conn, app.id)
+            if run:
+                lines.append("")
+                lines.append(f"Apply: {run.status.value}")
+                if run.last_step:
+                    lines.append(f"  Step: {run.last_step}")
+                if run.error_message:
+                    lines.append(f"  Error: {run.error_message}")
 
         detail = self.query_one("#detail-queue", Static)
         detail.update("\n".join(lines))
@@ -1065,3 +1085,90 @@ class WorkConsoleApp(App):
         idx = option_list.highlighted
         if idx is not None and 0 <= idx < len(self._queue_apps):
             self._show_queue_detail(idx)
+
+    # ------------------------------------------------------------------
+    # Auto-apply (background browser submission)
+    # ------------------------------------------------------------------
+
+    def action_apply(self) -> None:
+        """Launch an autonomous apply run for the selected Queue item."""
+        if self._active_tab != "Queue":
+            return
+        app = self._current_queue_app()
+        if app is None:
+            return
+        if app.id in self._applying:
+            self.notify("Already applying...", severity="warning")
+            return
+
+        # Check for source URL
+        opp = get_opportunity(self._conn, app.opportunity_id)
+        if opp is None or not opp.source_url:
+            self.notify("No URL to apply to", severity="warning")
+            return
+
+        # Create the apply run record
+        now = datetime.now()
+        run = ApplyRun(
+            application_id=app.id,
+            started_at=now,
+            updated_at=now,
+        )
+        save_apply_run(self._conn, run)
+
+        self._applying.add(app.id)
+        self.notify(f"Auto-applying to {opp.company}...")
+        self._refresh_current_queue_detail()
+        self._run_apply_bg(app.id, run.id)
+
+    @work(exclusive=False)
+    async def _run_apply_bg(self, app_id: str, run_id: str) -> None:
+        """Background worker that runs the full Browser Use apply orchestration."""
+        from emplaiyed.apply.orchestrator import run_apply
+        from emplaiyed.core.database import get_apply_run, init_db, get_default_db_path
+        from emplaiyed.core.profile_store import get_default_profile_path, load_profile
+
+        # Use a fresh DB connection for the background worker
+        worker_conn = init_db(get_default_db_path())
+
+        try:
+            run = get_apply_run(worker_conn, run_id)
+            if run is None:
+                return
+
+            profile_path = get_default_profile_path()
+            if not profile_path.exists():
+                self.notify("No profile found", severity="error")
+                return
+            profile = load_profile(profile_path)
+
+            final_run = await run_apply(worker_conn, run, profile)
+
+            if self._closing:
+                return
+
+            if final_run.status == ApplyRunStatus.SUCCEEDED:
+                self.notify("Application submitted!", severity="information")
+                self._refresh_all()
+            elif final_run.status == ApplyRunStatus.BLOCKED:
+                self.notify(
+                    f"Blocked: {final_run.error_message or 'unknown'}",
+                    severity="warning",
+                )
+            else:
+                self.notify(
+                    f"Apply failed: {final_run.error_message or 'unknown'}",
+                    severity="error",
+                )
+
+            self._refresh_current_queue_detail()
+        except Exception:
+            if not self._closing:
+                logger.warning("Apply run failed for %s", app_id, exc_info=True)
+                self.notify("Apply run crashed", severity="error")
+        finally:
+            self._applying.discard(app_id)
+            try:
+                worker_conn.close()
+            except Exception:
+                pass

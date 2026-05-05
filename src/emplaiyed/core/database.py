@@ -9,12 +9,15 @@ from typing import Any
 from emplaiyed.core.models import (
     Application,
     ApplicationStatus,
+    ApplyRun,
+    ApplyRunStatus,
     Contact,
     Interaction,
     InteractionType,
     Offer,
     OfferStatus,
     Opportunity,
+    PortalKind,
     ScheduledEvent,
     StatusTransition,
     WorkItem,
@@ -153,6 +156,22 @@ _POST_MIGRATIONS = [
     """
     CREATE VIRTUAL TABLE IF NOT EXISTS opportunities_fts
     USING fts5(opp_id UNINDEXED, company, title, description, location)
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS apply_runs (
+        id              TEXT PRIMARY KEY,
+        application_id  TEXT NOT NULL,
+        status          TEXT NOT NULL DEFAULT 'QUEUED',
+        portal_kind     TEXT NOT NULL DEFAULT 'UNKNOWN',
+        current_url     TEXT,
+        last_step       TEXT,
+        error_message   TEXT,
+        artifact_dir    TEXT,
+        started_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        completed_at    TEXT,
+        FOREIGN KEY (application_id) REFERENCES applications(id)
+    )
     """,
 ]
 
@@ -1056,3 +1075,88 @@ def search_opportunities(
             )
         results.append((opp, app))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Apply Run CRUD
+# ---------------------------------------------------------------------------
+
+
+def save_apply_run(conn: sqlite3.Connection, run: ApplyRun) -> None:
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO apply_runs
+            (id, application_id, status, portal_kind, current_url, last_step,
+             error_message, artifact_dir, started_at, updated_at, completed_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run.id,
+            run.application_id,
+            run.status.value,
+            run.portal_kind.value,
+            run.current_url,
+            run.last_step,
+            run.error_message,
+            run.artifact_dir,
+            _datetime_to_str(run.started_at),
+            _datetime_to_str(run.updated_at),
+            _datetime_to_str(run.completed_at),
+        ),
+    )
+    conn.commit()
+
+
+def _row_to_apply_run(row: sqlite3.Row) -> ApplyRun:
+    return ApplyRun(
+        id=row["id"],
+        application_id=row["application_id"],
+        status=ApplyRunStatus(row["status"]),
+        portal_kind=PortalKind(row["portal_kind"]),
+        current_url=row["current_url"],
+        last_step=row["last_step"],
+        error_message=row["error_message"],
+        artifact_dir=row["artifact_dir"],
+        started_at=_str_to_datetime(row["started_at"]),  # type: ignore[arg-type]
+        updated_at=_str_to_datetime(row["updated_at"]),  # type: ignore[arg-type]
+        completed_at=_str_to_datetime(row["completed_at"]),
+    )
+
+
+def get_apply_run(conn: sqlite3.Connection, id: str) -> ApplyRun | None:
+    cur = conn.execute("SELECT * FROM apply_runs WHERE id = ?", (id,))
+    row = cur.fetchone()
+    return _row_to_apply_run(row) if row else None
+
+
+def get_active_apply_run(
+    conn: sqlite3.Connection, application_id: str
+) -> ApplyRun | None:
+    """Return the most recent non-terminal apply run for an application."""
+    terminal = ("SUCCEEDED", "FAILED", "BLOCKED", "CANCELLED")
+    placeholders = ",".join("?" for _ in terminal)
+    cur = conn.execute(
+        f"""
+        SELECT * FROM apply_runs
+        WHERE application_id = ?
+          AND status NOT IN ({placeholders})
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        (application_id, *terminal),
+    )
+    row = cur.fetchone()
+    return _row_to_apply_run(row) if row else None
+
+
+def list_apply_runs(
+    conn: sqlite3.Connection, application_id: str | None = None
+) -> list[ApplyRun]:
+    if application_id:
+        cur = conn.execute(
+            "SELECT * FROM apply_runs WHERE application_id = ? ORDER BY started_at DESC",
+            (application_id,),
+        )
+    else:
+        cur = conn.execute("SELECT * FROM apply_runs ORDER BY started_at DESC")
+    return [_row_to_apply_run(row) for row in cur.fetchall()]

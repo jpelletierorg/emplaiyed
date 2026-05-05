@@ -18,6 +18,7 @@ from emplaiyed.sources.talent import (
     _extract_company,
     _extract_job_id,
     _extract_location,
+    _parse_html_job_cards,
     _parse_date,
     _parse_salary,
     extract_jsonld_jobs,
@@ -264,6 +265,35 @@ SEARCH_RESULTS_HTML_DESC = """
 </html>
 """
 
+SEARCH_RESULTS_CARD_HTML = """
+<html>
+<body>
+<div data-job-id="abc123" data-new-id="615900722122268600" data-rank="1"
+     data-testid="jobcard-container-615900722122268600">
+  <article class="JobCard_card__TSiPB" data-testid="job-card-unified">
+    <header class="JobCard_header__tgcjv">
+      <div class="JobCard_heading__7POIz">
+        <h2 class="JobCard_title__X32Qk">Junior Software Developer / SRE</h2>
+        <address class="JobCard_meta__yPOkr">
+          <span class="JobCard_company__NmRol">CWP Energy</span>
+          <span class="JobCard_bullet__IlWM8">•</span>
+          <span class="JobCard_location__nmTtw">Montréal, QC, CA</span>
+        </address>
+      </div>
+    </header>
+    <div class="JobCard_body__Q46Ym">
+      <p class="JobCard_snippet__rqX60">Build cloud-native trading tools with Python.</p>
+      <span class="JobCard_readMore__01LyR">
+        <a href="/view?id=615900722122268600" rel="nofollow">Show more</a>
+      </span>
+      <time class="JobCard_timeText__wyyGm">Last updated: 3 days ago</time>
+    </div>
+  </article>
+</div>
+</body>
+</html>
+"""
+
 
 # ---------------------------------------------------------------------------
 # Helper: mock HTTP for TalentSource.scrape()
@@ -301,6 +331,7 @@ class TestBuildSearchUrl:
     ], ids=["basic", "location", "radius", "empty-keywords", "page2", "page0-no-p"])
     def test_url_construction(self, query, page, expected, not_expected):
         url = _build_search_url(query, page=page)
+        assert url.startswith("https://ca.talent.com/jobs")
         for exp in expected:
             assert exp in url, f"Expected '{exp}' in {url}"
         for nexp in not_expected:
@@ -460,8 +491,23 @@ class TestParseSearchResults:
         assert "<div>" not in desc
         assert "React" in desc
 
+    def test_current_html_cards_parsed(self):
+        results = parse_search_results(SEARCH_RESULTS_CARD_HTML)
+        assert len(results) == 1
+        first = results[0]
+        assert first["job_id"] == "615900722122268600"
+        assert first["title"] == "Junior Software Developer / SRE"
+        assert first["company"] == "CWP Energy"
+        assert first["location"] == "Montréal, QC, CA"
+        assert "cloud-native" in first["description"]
+        assert first["url"] == "https://ca.talent.com/view?id=615900722122268600"
+        assert first["posted_date"] is not None
+
     def test_empty_results(self):
         assert parse_search_results(SEARCH_RESULTS_NO_JSONLD_HTML) == []
+
+    def test_card_parser_empty_without_cards(self):
+        assert _parse_html_job_cards(SEARCH_RESULTS_NO_JSONLD_HTML) == []
 
 
 # ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-"""Talent.com scraper -- fetches jobs from talent.com.
+"""Talent.com scraper -- fetches jobs from ca.talent.com.
 
 Scrapes the Talent.com job aggregator search results to produce
 Opportunity objects.
@@ -10,7 +10,7 @@ initial HTML response. We extract structured data from those tags,
 avoiding the need for a headless browser.
 
 URL format:
-    https://www.talent.com/jobs?k={keywords}&l={location}&r={radius}
+    https://ca.talent.com/jobs?k={keywords}&l={location}&r={radius}
 
 The JSON-LD contains schema.org JobPosting objects with fields like:
     title, hiringOrganization.name, jobLocation, description,
@@ -22,8 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
-from urllib.parse import urlencode
+from datetime import datetime, timedelta
+from urllib.parse import urljoin, urlencode
 
 import httpx
 from bs4 import BeautifulSoup
@@ -33,7 +33,7 @@ from emplaiyed.sources.base import BaseSource, SearchQuery
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://www.talent.com"
+_BASE_URL = "https://ca.talent.com"
 _SEARCH_PATH = "/jobs"
 
 
@@ -142,6 +142,34 @@ def _parse_date(date_str: str | None) -> datetime | None:
             return datetime.strptime(date_str, fmt)
         except ValueError:
             continue
+    return None
+
+
+def _parse_relative_date(text: str | None) -> datetime | None:
+    """Parse Talent.com relative timestamps like 'Last updated: 3 days ago'."""
+    if not text:
+        return None
+
+    text_lower = text.strip().lower()
+    text_lower = text_lower.replace("last updated:", "").strip()
+
+    if "today" in text_lower or "just now" in text_lower:
+        return datetime.now()
+
+    match = re.search(r"(\d+)\+?\s*(hour|day|week|month)s?\s+ago", text_lower)
+    if not match:
+        return None
+
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if unit == "hour":
+        return datetime.now() - timedelta(hours=amount)
+    if unit == "day":
+        return datetime.now() - timedelta(days=amount)
+    if unit == "week":
+        return datetime.now() - timedelta(weeks=amount)
+    if unit == "month":
+        return datetime.now() - timedelta(days=amount * 30)
     return None
 
 
@@ -272,6 +300,71 @@ def extract_jsonld_jobs(html: str) -> list[dict]:
     return jobs
 
 
+def _find_by_class_prefix(soup: BeautifulSoup, class_prefix: str):
+    """Find the first tag whose CSS-module class starts with class_prefix."""
+    return soup.find(
+        class_=lambda classes: bool(
+            classes
+            and any(
+                str(cls).startswith(class_prefix)
+                for cls in (classes if isinstance(classes, list) else [classes])
+            )
+        )
+    )
+
+
+def _extract_text_by_class_prefix(soup: BeautifulSoup, class_prefix: str) -> str:
+    tag = _find_by_class_prefix(soup, class_prefix)
+    return tag.get_text(" ", strip=True) if tag else ""
+
+
+def _parse_html_job_cards(html: str) -> list[dict]:
+    """Parse current Talent.com SSR job cards.
+
+    Talent.com no longer exposes JobPosting JSON-LD on search pages. The search
+    results are still server-rendered, so we extract the visible card fields.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    results: list[dict] = []
+    seen_ids: set[str] = set()
+
+    for card in soup.select('[data-testid^="jobcard-container"]'):
+        job_id = card.get("data-new-id") or card.get("data-job-id")
+        link = card.find("a", href=True)
+        href = link.get("href", "") if link else ""
+        if not job_id:
+            job_id = _extract_job_id({"url": href}) or href
+        if not job_id or job_id in seen_ids:
+            continue
+
+        title = _extract_text_by_class_prefix(card, "JobCard_title__")
+        company = _extract_text_by_class_prefix(card, "JobCard_company__")
+        location = _extract_text_by_class_prefix(card, "JobCard_location__")
+        description = _extract_text_by_class_prefix(card, "JobCard_snippet__")
+        posted_text = _extract_text_by_class_prefix(card, "JobCard_timeText__")
+
+        if not title or not company:
+            continue
+
+        seen_ids.add(str(job_id))
+        results.append(
+            {
+                "job_id": str(job_id),
+                "title": title,
+                "company": company or "Unknown Company",
+                "location": location,
+                "description": description,
+                "salary_min": None,
+                "salary_max": None,
+                "posted_date": _parse_relative_date(posted_text),
+                "url": urljoin(_BASE_URL, href) if href else "",
+                "hiring_org": None,
+            }
+        )
+
+    return results
+
+
 def parse_search_results(html: str) -> list[dict]:
     """Parse Talent.com search results page.
 
@@ -281,6 +374,9 @@ def parse_search_results(html: str) -> list[dict]:
     description, salary_min, salary_max, posted_date, url.
     """
     jsonld_jobs = extract_jsonld_jobs(html)
+    if not jsonld_jobs:
+        return _parse_html_job_cards(html)
+
     results: list[dict] = []
     seen_ids: set[str] = set()
 

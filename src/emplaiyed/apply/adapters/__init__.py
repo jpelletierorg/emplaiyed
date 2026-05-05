@@ -1,0 +1,1 @@
+"""Portal-specific application adapters."""

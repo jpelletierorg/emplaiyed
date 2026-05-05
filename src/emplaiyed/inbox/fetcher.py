@@ -124,6 +124,9 @@ def _parse_message(raw_bytes: bytes) -> FetchedEmail:
             "from": from_raw,
             "to": to_raw,
             "reply-to": msg.get("Reply-To", ""),
+            "delivered-to": msg.get("Delivered-To", ""),
+            "return-path": msg.get("Return-Path", ""),
+            "x-original-to": msg.get("X-Original-To", ""),
         },
     )
 

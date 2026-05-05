@@ -33,7 +33,8 @@ DEFAULT_MODEL = os.environ.get(
 
 CV_MODEL = os.environ.get("EMPLAIYED_CV_MODEL", "google/gemini-3-flash-preview")
 LETTER_MODEL = os.environ.get("EMPLAIYED_LETTER_MODEL", "google/gemini-3-flash-preview")
-SEARCH_MODEL = os.environ.get("EMPLAIYED_SEARCH_MODEL", "anthropic/claude-opus-4.6")
+SEARCH_MODEL = os.environ.get("EMPLAIYED_SEARCH_MODEL", "anthropic/claude-haiku-4.5")
+SEARCH_MAX_TOKENS = int(os.environ.get("EMPLAIYED_SEARCH_MAX_TOKENS", "4096"))
 SCORING_MODEL = os.environ.get(
     "EMPLAIYED_SCORING_MODEL", "google/gemini-3-flash-preview"
 )
@@ -42,6 +43,9 @@ LOCATION_FILTER_MODEL = os.environ.get(
 )
 OUTREACH_MODEL = os.environ.get(
     "EMPLAIYED_OUTREACH_MODEL", "google/gemini-3-flash-preview"
+)
+APPLY_AGENT_MODEL = os.environ.get(
+    "EMPLAIYED_APPLY_AGENT_MODEL", "anthropic/claude-opus-4.6"
 )
 PROFILE_MODEL = os.environ.get(
     "EMPLAIYED_PROFILE_MODEL", "google/gemini-3-flash-preview"
