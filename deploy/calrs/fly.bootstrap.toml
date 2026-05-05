@@ -1,0 +1,13 @@
+app = "jp-calrs"
+primary_region = "yyz"
+
+[build]
+  image = "ghcr.io/olivierlambert/calrs:0.14.0"
+
+[env]
+  CALRS_BASE_URL = "https://meet.jpelletier.org"
+  RUST_LOG = "calrs=info,tower_http=info"
+
+[mounts]
+  source = "calrs_data"
+  destination = "/var/lib/calrs"
